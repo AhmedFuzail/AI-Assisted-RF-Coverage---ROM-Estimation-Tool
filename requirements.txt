@@ -2,4 +2,3 @@ streamlit
 pandas
 numpy
 matplotlib
-base64
