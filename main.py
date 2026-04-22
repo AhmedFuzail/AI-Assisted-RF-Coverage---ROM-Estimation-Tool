@@ -140,7 +140,7 @@ with st.form(key ='rf_solution_form'):
                 "Power Sharing Between Multiple Operators",
                 value= False)
     caption_Submit_RF = st.caption("Submit and Move to Building Details")
-    Submit_button = st.form_submit_button(label="Submit")
+    Submit_button = st.form_submit_button(label="Submit", )
 
 
 # -----------------------------
@@ -246,4 +246,38 @@ if not st.session_state.form_data_table.empty:
         file_name="building_category_data.csv",
         mime="text/csv"
     )
+
+import random
+
+base = 16400
+
+# random number in thousands (1000 to 9000)
+rand_thousands = random.randint(1, 9) * 250
+
+# randomly add or subtract
+result = base + rand_thousands if random.choice([True, False]) else base - rand_thousands
+
+st.divider()
+
+st.text("(THESE ARE NOT ACTUALL RESULTS (DEMO ONLY)")
+st.text("Coverage per DOT in  sq . ft") 
+st.markdown("""
+<style>
+.custom-textbox {
+    border: 4px solid #4CAF50;
+    border-radius: 8px;
+    padding: 10px;
+    font-size: 22px;
+    width: auto !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+user_input = f"{result:,.2f}"
+if submitted or Submit_button: 
+    st.markdown(f"""
+    <input class="custom-textbox" value="{user_input}">
+    """, unsafe_allow_html=True)
+
+st.divider()
 
