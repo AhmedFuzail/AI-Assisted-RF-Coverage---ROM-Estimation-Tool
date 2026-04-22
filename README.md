@@ -5,7 +5,7 @@ A Streamlit-based web application to quickly estimate **RF coverage** and **Roug
 ---
 
 ## 🚀 Live App
-👉 https://your-app-name.streamlit.app
+👉 https://ai-assisted-rf-coverage.streamlit.app/
 
 ---
 
@@ -61,7 +61,7 @@ This tool helps RF engineers, solution architects, and leadership teams:
 ## ▶️ Run Locally
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/YOUR_REPO.git
-cd YOUR_REPO
+git clone https://github.com/AhmedFuzail/AI-Assisted-RF-Coverage---ROM-Estimation-Tool.git
+cd AI-Assisted-RF-Coverage---ROM-Estimation-Tool
 pip install -r requirements.txt
 streamlit run app.py
