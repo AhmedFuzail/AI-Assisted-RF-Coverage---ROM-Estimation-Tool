@@ -1,0 +1,11 @@
+[server]
+enableStaticServing = true
+
+[[theme.fontFaces]]
+family = "Hilda"
+url = "app/static/Hilda-Regular.ttf"
+weight = 400
+
+[theme]
+font = "Hilda"
+headingFont = "Hilda"
