@@ -108,7 +108,7 @@ caption_main = st.caption("Solution and RF details", )
 with st.form(key ='rf_solution_form'):
     Customer_name = st.text_input("Enter Customer Name")
     venue_name = st.text_input("Enter Venue Name")
-    total_sqft = st.text_input("Enter Total Sq.Ft Coverage")
+    total_sqft = st.text_input("Enter Total Sq.Ft Coverage", value=100000)
     Building_type = st.selectbox(
                 "Select General Building Type",
                 ["Office", "Industrial","Healthcare", "Education","Retail", "Hospitality","Transportation", "Data_Center","Hospitality","Residential", "Mixed_Use","Parking_Garage"])   
@@ -260,7 +260,7 @@ result = base + rand_thousands if random.choice([True, False]) else base - rand_
 st.divider()
 
 st.text("(THESE ARE NOT ACTUALL RESULTS (DEMO ONLY)")
-st.text("Coverage per DOT in  sq . ft") 
+ 
 st.markdown("""
 <style>
 .custom-textbox {
@@ -275,9 +275,22 @@ st.markdown("""
 
 user_input = f"{result:,.2f}"
 if submitted or Submit_button: 
+    st.text("Coverage per DOT in  sq . ft")
     st.markdown(f"""
     <input class="custom-textbox" value="{user_input}">
     """, unsafe_allow_html=True)
-
-st.divider()
+    total_dots = float(total_sqft) / float(result)
+    total_dots_rounded = (round(total_dots,0))
+    st.write("\n")
+    st.text("Required DOTs")
+    st.markdown(f"""
+    <input class="custom-textbox" value="{total_dots_rounded}">
+    """, unsafe_allow_html=True)
+    st.write("\n")
+    total_IRUs = total_dots_rounded / 7
+    total_IRUs_rounded = round(total_IRUs,0)
+    st.text("Required IRUs")
+    st.markdown(f"""
+    <input class="custom-textbox" value="{total_IRUs_rounded}">
+    """, unsafe_allow_html=True)
 
