@@ -50,7 +50,7 @@ html, body, [class*="css"] {{
 ericsson_logo = st.image(os.path.join(os.getcwd(),"static","Ericsson_logo.svg.png"),width=100, )
 
 
-title_Main = st.title("Ericsson AI-Assisted RF Coverage & ROM Estimation Tool")
+title_Main = st.title("Ericsson AI-Assisted RF ROM Estimation Tool")
 #header_Main = st.header("DOT 4459")
 st.divider()
 subheader_Main = st.subheader("Pre-Sales Support Tool For Quick HW estimation for EP5G Deployments")
