@@ -2,7 +2,10 @@ import streamlit as st
 import os
 import pandas as pd
 
-
+st.set_page_config(
+    page_title="Ericsson RF ROM Tool",
+    page_icon="static/Ericsson_icon.png"   # your image file
+)
 
 #st.write("Hello World!")
 
