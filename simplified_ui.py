@@ -494,7 +494,7 @@ if "rf_intake_data" not in st.session_state:
 if "show_intake_summary" not in st.session_state:
     st.session_state.show_intake_summary = False
 if "show_clutter_information" not in st.session_state:
-    st.session_state.show_clutter_information = True
+    st.session_state.show_clutter_information = False
 if "show_add_modify_clutter" not in st.session_state:
     st.session_state.show_add_modify_clutter = False
 
@@ -703,7 +703,7 @@ else:
             st.session_state.rf_intake_step = 0
             st.session_state.rf_intake_data = {}
             st.session_state.show_intake_summary = False
-            st.session_state.show_clutter_information = True
+            st.session_state.show_clutter_information = False
             st.session_state.show_add_modify_clutter = False
             st.session_state.mapl_result = None
             st.session_state.mapl_result_df = None
@@ -764,7 +764,6 @@ if st.session_state.show_intake_summary:
         st.caption("Completed answers will appear here as the intake progresses.")
 
 if st.session_state.rf_intake_step >= total_steps:
-    st.subheader("Building and Clutter Information")
     selected_building_type = st.session_state.rf_intake_data.get("Building_type")
     selected_building_category = st.session_state.rf_intake_data.get("Building_category")
     structure_columns = [
@@ -777,6 +776,8 @@ if st.session_state.rf_intake_step >= total_steps:
 
     if st.button("Show/Hide Clutter Information"):
         st.session_state.show_clutter_information = not st.session_state.show_clutter_information
+        if not st.session_state.show_clutter_information:
+            st.session_state.show_add_modify_clutter = False
         st.rerun()
 
     if selected_building_type and selected_building_category:
@@ -810,6 +811,7 @@ if st.session_state.rf_intake_step >= total_steps:
         visible_structure_columns = ["Building_Type", "Category", "Sub_Type_A", "Sub_Type_Area_%", "Coverage Area"]
 
         if st.session_state.show_clutter_information:
+            st.subheader("Building and Clutter Information")
             if display_structure_df.empty:
                 st.caption("No building and clutter rows found for the selected structure.")
             else:
@@ -905,9 +907,6 @@ if st.session_state.rf_intake_step >= total_steps:
                         else:
                             st.success("Structure row added.")
                         st.rerun()
-        else:
-            st.caption("Building and clutter information is hidden.")
-
         show_rf_details_key = f"show_rf_details::{selected_building_type}::{selected_building_category}"
         rf_details_button = st.button("Show/Hide Building RF/Structural Details")
         if rf_details_button:
@@ -1065,6 +1064,3 @@ if st.session_state.rf_intake_step >= total_steps:
 
     else:
         st.caption("Select General Building Type and Building Category to view the associated structure details.")
-else:
-    st.subheader("Building and Clutter Information")
-    st.caption("Complete the User Intake Section to enable building and clutter information.")
