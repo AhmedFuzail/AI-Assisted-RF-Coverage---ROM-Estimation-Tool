@@ -1,0 +1,19 @@
+# Python-generated files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Local environments and secrets
+.venv/
+venv/
+.env
+.streamlit/secrets.toml
+
+# Local backups and logs
+backups/
+*.log
+
+# Reference and legacy files not required at runtime
+ITU-R P.1238-13 indoor site-general coefficients..pdf
+subtype_a_to_Category_subtype_b_floorplan_mapping.csv

@@ -1,5 +1,4 @@
 import streamlit as st
-import math
 import os
 import pandas as pd
 import json
@@ -7,18 +6,22 @@ from html import escape
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from coverage_engine import calculate_coverage_for_all_buildings, resolve_technology
+from coverage_engine import (
+    calculate_coverage_for_all_buildings,
+    resolve_technology,
+    summarize_building_equipment,
+)
 from radio_reference import (
     build_radio_mapl_config,
     calculate_mapl,
     get_radio_dot_characteristics,
     get_radio_dot_variants,
     get_supported_bands,
-    reference_table_display_rows,
 )
 st.set_page_config(
-    page_title="Ericsson RF ROM Tool",
-    page_icon="static/Ericsson_icon.png"   # your image file
+    page_title="Ericsson RF ROM Tool - Simplified",
+    page_icon="static/Ericsson_icon.png",
+    layout="wide",
 )
 
 #st.write("Hello World!")
@@ -105,12 +108,7 @@ def mapl_result_to_table(result):
     )
     return table_df
 
-#header_Main = st.header("DOT 4459")
 st.divider()
-subheader_Main = st.subheader("Pre-Sales Support Tool For Quick HW estimation for EP5G Deployments")
-#markdown_Main = st.markdown("This is the ##**_test version_**##")
-#st.divider()
-caption_main = st.caption("E/// Internal Only")
 
 #code_example = """
 #def greet(name):
@@ -308,17 +306,12 @@ if address_suggestions:
     selected_address_label = st.selectbox("Suggested addresses", suggestion_labels)
     selected_suggestion = address_suggestions[suggestion_labels.index(selected_address_label)]
 
-    address_action_col, map_action_col = st.columns([1, 1])
-    with address_action_col:
-        if st.button("Use selected address"):
-            st.session_state.selected_address = selected_suggestion["label"]
-            st.session_state.location_latitude = selected_suggestion["latitude"]
-            st.session_state.location_longitude = selected_suggestion["longitude"]
-            st.rerun()
-    with map_action_col:
-        if st.button("Show/Hide Map"):
-            st.session_state.show_project_map = not st.session_state.show_project_map
-            st.rerun()
+    if st.button("Use selected address"):
+        st.session_state.selected_address = selected_suggestion["label"]
+        st.session_state.location_latitude = selected_suggestion["latitude"]
+        st.session_state.location_longitude = selected_suggestion["longitude"]
+        st.session_state.show_project_map = True
+        st.rerun()
 
 Loc_data = {
     "latitude": [st.session_state.location_latitude],
@@ -344,7 +337,7 @@ intake_steps = [
     {"key": "sol_type", "label": "Equipment Type", "prompt": "Which equipment architecture should the ROM assume?", "type": "select", "options": ["DOT-IRU-BBU", "Micro-BBU"]},
     {"key": "Operator_type", "label": "Operator Type", "prompt": "What operator or deployment model applies?", "type": "select", "options": ["Enterprise Private 5G", "Enterprise 5G Coverage"]},
     {"key": "Coverage_type", "label": "Coverage Type", "prompt": "Which coverage technology should be calculated?", "type": "select", "options": ["4G", "5G"]},
-    {"key": "target_rsrp", "label": "Target RSRP", "prompt": "What target RSRP should the private 5G design use?", "type": "range_slider", "default": -95, "min": -120, "max": -80, "step": 1},
+    {"key": "target_rsrp", "label": "Target RSRP (Recommended at -95 for standard EP5G designs)", "prompt": "What target RSRP should the private 5G design use?", "type": "range_slider", "default": -95, "min": -120, "max": -80, "step": 1},
     {"key": "Mobility_type", "label": "Mobility Requirement", "prompt": "What mobility requirement should the design support?", "type": "select", "options": ["Low Mobility", "High Mobility"]},
     {"key": "dot_type", "label": "Radio Dot Model", "prompt": "Which Radio Dot model should be assumed?", "type": "select", "options": ["DOT 4459", "Micro_4408", "Micro_4402", "DOT 4455", "DOT 2274"]},
     {"key": "dot_variant_kry", "label": "Hardware Variant", "prompt": "Which KRY hardware variant applies?", "type": "select", "options": []},
@@ -354,13 +347,48 @@ intake_steps = [
     {"key": "power_sharing", "label": "Power Sharing", "prompt": "Is power shared between multiple operators?", "type": "checkbox", "default": False},
 ]
 
+def compatible_dot_variant_options(intake_data):
+    dot_model = str(intake_data.get("dot_type", "")).strip()
+    if not dot_model or dot_model.startswith("Micro"):
+        return []
+    technology = _intake_technology(intake_data)
+    allowed_bands = _deployment_allowed_bands(intake_data)
+    try:
+        variants = get_radio_dot_variants(dot_model, technology=technology)
+        return [
+            variant
+            for variant in variants
+            if set(get_supported_bands(dot_model, variant, technology)).intersection(allowed_bands)
+        ]
+    except ValueError:
+        return []
+
+
+def format_dot_variant_option(variant, intake_data):
+    dot_model = intake_data.get("dot_type", "")
+    technology = _intake_technology(intake_data)
+    allowed_bands = _deployment_allowed_bands(intake_data)
+    try:
+        supported_bands = sorted(
+            set(get_supported_bands(dot_model, variant, technology)).intersection(allowed_bands)
+        )
+    except ValueError:
+        supported_bands = []
+    band_text = ", ".join(supported_bands) if supported_bands else "band unavailable"
+    return f"{variant} ({band_text})"
+
+
 def should_auto_fill_step(step, intake_data):
     operator_type = intake_data.get("Operator_type")
+    if step["key"] == "dot_variant_kry":
+        if intake_data.get("sol_type") == "Micro-BBU":
+            return True
+        dot_model = str(intake_data.get("dot_type", "")).strip()
+        return bool(dot_model) and len(compatible_dot_variant_options(intake_data)) == 1
     return (
         (step["key"] in ("Operator_count", "Max_lim_channel_count", "power_sharing") and operator_type == "Enterprise Private 5G")
         or (step["key"] == "target_rsrp" and operator_type == "Enterprise 5G Coverage")
         or (step["key"] == "Coverage_type" and operator_type != "Enterprise 5G Coverage")
-        or (step["key"] == "dot_variant_kry" and intake_data.get("sol_type") == "Micro-BBU")
     )
 
 
@@ -445,17 +473,7 @@ def get_filtered_step_options(step, intake_data):
         return compatible_options
 
     if step["key"] == "dot_variant_kry":
-        dot_model = intake_data.get("dot_type", "")
-        if not str(dot_model).strip() or str(dot_model).startswith("Micro"):
-            return []
-        technology = _intake_technology(intake_data)
-        allowed_bands = _deployment_allowed_bands(intake_data)
-        variants = get_radio_dot_variants(dot_model, technology=technology)
-        return [
-            variant
-            for variant in variants
-            if set(get_supported_bands(dot_model, variant, technology)).intersection(allowed_bands)
-        ]
+        return compatible_dot_variant_options(intake_data)
 
     if step["key"] == "Limit_freq_type":
         dot_model = intake_data.get("dot_type", "")
@@ -498,7 +516,11 @@ while st.session_state.rf_intake_step < total_steps:
     if auto_fill_step["key"] == "power_sharing":
         st.session_state.rf_intake_data[auto_fill_step["key"]] = False
     elif auto_fill_step["key"] == "dot_variant_kry":
-        st.session_state.rf_intake_data.pop(auto_fill_step["key"], None)
+        compatible_variants = compatible_dot_variant_options(st.session_state.rf_intake_data)
+        if len(compatible_variants) == 1:
+            st.session_state.rf_intake_data[auto_fill_step["key"]] = compatible_variants[0]
+        else:
+            st.session_state.rf_intake_data.pop(auto_fill_step["key"], None)
     elif auto_fill_step["key"] == "target_rsrp":
         st.session_state.rf_intake_data.pop(auto_fill_step["key"], None)
     elif auto_fill_step["key"] == "Coverage_type":
@@ -557,7 +579,18 @@ if st.session_state.rf_intake_step < total_steps:
         elif current_step["type"] == "select":
             options = current_step["options"]
             selected_index = options.index(existing_value) if existing_value in options else 0
-            step_value = st.selectbox(current_step["label"], options, index=selected_index)
+            if current_step["key"] == "dot_variant_kry" and len(options) > 1:
+                step_value = st.selectbox(
+                    current_step["label"],
+                    options,
+                    index=selected_index,
+                    format_func=lambda variant: format_dot_variant_option(
+                        variant,
+                        st.session_state.rf_intake_data,
+                    ),
+                )
+            else:
+                step_value = st.selectbox(current_step["label"], options, index=selected_index)
         elif current_step["type"] == "slider":
             options = current_step["options"]
             selected_index = options.index(existing_value) if existing_value in options else 0
@@ -782,19 +815,33 @@ if st.session_state.rf_intake_step >= total_steps:
             else:
                 edited_visible_structure_df = st.data_editor(
                     edited_structure_df[visible_structure_columns],
-                    width="content",
+                    width="stretch",
                     hide_index=True,
                     disabled=["Building_Type", "Category", "Sub_Type_A", "Coverage Area"],
                     column_config={
+                        "Building_Type": st.column_config.TextColumn(
+                            "Building Type",
+                            width="small",
+                        ),
+                        "Category": st.column_config.TextColumn(
+                            "Category",
+                            width="small",
+                        ),
+                        "Sub_Type_A": st.column_config.TextColumn(
+                            "Sub Type",
+                            width="medium",
+                        ),
                         "Sub_Type_Area_%": st.column_config.NumberColumn(
-                            "Sub_Type_Area_%",
+                            "Area %",
                             min_value=0.0,
                             max_value=100.0,
                             step=1.0,
+                            width="small",
                         ),
                         "Coverage Area": st.column_config.NumberColumn(
                             "Coverage Area",
                             format="%d sq ft",
+                            width="small",
                         ),
                     },
                     key=structure_table_key,
@@ -929,125 +976,10 @@ if st.session_state.rf_intake_step >= total_steps:
         carrier_frequency_override = None
         configured_tx_power_override = None
         power_is_total_across_carriers = False
-        if selected_radio_characteristics is not None:
-            radio_key = "::".join((
-                selected_radio_characteristics.dot_model,
-                selected_radio_characteristics.dot_variant_kry,
-                selected_radio_characteristics.band,
-                selected_technology,
-            ))
-            with st.expander("Advanced RF Settings"):
-                use_frequency_override = st.checkbox(
-                    "Override carrier frequency",
-                    value=False,
-                    key=f"use_carrier_frequency_override::{radio_key}",
-                )
-                if use_frequency_override:
-                    carrier_frequency_override = st.number_input(
-                        "Carrier Frequency (MHz)",
-                        min_value=float(selected_radio_characteristics.frequency_min_mhz),
-                        max_value=float(selected_radio_characteristics.frequency_max_mhz),
-                        value=float(selected_radio_characteristics.carrier_frequency_mhz),
-                        step=1.0,
-                        key=f"carrier_frequency_override::{radio_key}",
-                    )
-                use_power_override = st.checkbox(
-                    "Override Tx power per branch",
-                    value=False,
-                    key=f"use_tx_power_override::{radio_key}",
-                )
-                if use_power_override:
-                    configured_tx_power_override = st.number_input(
-                        "Configured Tx Power Per Branch (dBm)",
-                        min_value=-10.0,
-                        max_value=40.0,
-                        value=float(selected_radio_characteristics.default_tx_power_dbm_per_branch),
-                        step=0.5,
-                        key=f"tx_power_override::{radio_key}",
-                    )
-                    st.info("Using user-configured Tx power instead of the Radio Dot default.")
-                power_is_total_across_carriers = st.checkbox(
-                    "Entered power is total branch power shared equally across carriers",
-                    value=False,
-                    key=f"power_total_across_carriers::{radio_key}",
-                )
-
-            configured_power = (
-                float(configured_tx_power_override)
-                if configured_tx_power_override is not None
-                else selected_radio_characteristics.default_tx_power_dbm_per_branch
-            )
-            carrier_count = max(int(intake_data.get("Max_lim_channel_count", 1)), 1)
-            sharing_loss = 10 * math.log10(carrier_count) if power_is_total_across_carriers else 0.0
-            branch_eirp = configured_power - sharing_loss + selected_radio_characteristics.antenna_gain_dbi
-            selected_radio_df = pd.DataFrame([{
-                "Hardware variant": selected_radio_characteristics.dot_variant_kry,
-                "Duplex mode": selected_radio_characteristics.duplex_mode,
-                "Tx branches": selected_radio_characteristics.tx_branch_count,
-                "Default Tx power per branch": f"{selected_radio_characteristics.default_tx_power_dbm_per_branch:g} dBm",
-                "Configured Tx power per branch": f"{configured_power:g} dBm",
-                "Antenna gain": f"{selected_radio_characteristics.antenna_gain_dbi:g} dBi",
-                "Branch EIRP": f"{branch_eirp:.2f} dBm",
-                "Operating-frequency range": (
-                    f"{selected_radio_characteristics.frequency_min_mhz:g}-"
-                    f"{selected_radio_characteristics.frequency_max_mhz:g} MHz"
-                ),
-            }])
-            st.subheader("Selected Radio Dot RF Characteristics")
-            st.dataframe(selected_radio_df, width="content", hide_index=True)
-            for warning in selected_radio_characteristics.warnings:
-                st.warning(warning)
-        elif selected_radio_error:
-            st.warning(selected_radio_error)
-
-        with st.expander("Ericsson Radio Dot RF Reference"):
-            st.dataframe(pd.DataFrame(reference_table_display_rows()), width="stretch", hide_index=True)
-            st.caption("Special operating notes appear as selection warnings and are not included in the concise table.")
-
-        override_defaults = rf_engine_df[["Area_ID", "Sub_Type_A"]].copy()
-        override_defaults["ITU Environment Override"] = "Automatic"
-        override_defaults["LOS/NLOS Override"] = "Automatic"
-        override_defaults["Additional Loss Override (dB)"] = float("nan")
-        override_defaults["Area Efficiency Override"] = float("nan")
-        override_key = f"coverage_overrides::{selected_building_type}::{selected_building_category}"
-        with st.expander("Advanced Coverage Overrides"):
-            edited_overrides_df = st.data_editor(
-                override_defaults,
-                width="stretch",
-                hide_index=True,
-                disabled=["Area_ID", "Sub_Type_A"],
-                column_config={
-                    "ITU Environment Override": st.column_config.SelectboxColumn(
-                        "ITU Environment Override",
-                        options=["Automatic", "office", "corridor", "industrial", "conference"],
-                    ),
-                    "LOS/NLOS Override": st.column_config.SelectboxColumn(
-                        "LOS/NLOS Override",
-                        options=["Automatic", "los", "nlos"],
-                    ),
-                    "Additional Loss Override (dB)": st.column_config.NumberColumn(
-                        "Additional Loss Override (dB)", min_value=0.0, step=0.5,
-                    ),
-                    "Area Efficiency Override": st.column_config.NumberColumn(
-                        "Area Efficiency Override", min_value=0.30, max_value=1.00, step=0.05,
-                    ),
-                },
-                key=override_key,
-            )
+        if selected_radio_characteristics is None and selected_radio_error:
+            st.error(selected_radio_error)
 
         coverage_overrides = {}
-        for _, override_row in edited_overrides_df.iterrows():
-            row_override = {}
-            if override_row["ITU Environment Override"] != "Automatic":
-                row_override["environment"] = override_row["ITU Environment Override"]
-            if override_row["LOS/NLOS Override"] != "Automatic":
-                row_override["condition"] = override_row["LOS/NLOS Override"]
-            if pd.notna(override_row["Additional Loss Override (dB)"]):
-                row_override["additional_loss_db"] = float(override_row["Additional Loss Override (dB)"])
-            if pd.notna(override_row["Area Efficiency Override"]):
-                row_override["area_efficiency"] = float(override_row["Area Efficiency Override"])
-            if row_override:
-                coverage_overrides[str(override_row["Area_ID"])] = row_override
 
         if st.button("Run RF calculations"):
             intake_data = st.session_state.rf_intake_data
@@ -1103,12 +1035,6 @@ if st.session_state.rf_intake_step >= total_steps:
             st.rerun()
         if st.session_state.get("mapl_result_error"):
             st.error(st.session_state.mapl_result_error)
-        if st.session_state.get("mapl_result_df") is not None:
-            st.subheader("RF Calculation Results")
-            st.dataframe(st.session_state.mapl_result_df, width="content", hide_index=True)
-            mapl_warnings = st.session_state.mapl_result.get("Warnings", "") if st.session_state.mapl_result else ""
-            if mapl_warnings:
-                st.warning(mapl_warnings)
 
         if st.session_state.get("coverage_result_error"):
             st.error(st.session_state.coverage_result_error)
@@ -1116,52 +1042,27 @@ if st.session_state.rf_intake_step >= total_steps:
             coverage_result_df = st.session_state.coverage_result_df
             result_technology = st.session_state.mapl_result.get("Technology", "") if st.session_state.mapl_result else ""
             st.subheader(f"Step 2 - {result_technology} Coverage Results")
-            valid_results = coverage_result_df[
-                coverage_result_df["Result_Valid_For_Planning"].fillna(False)
-                & coverage_result_df["Planning_Area_sqft"].notna()
-            ]
-            if not valid_results.empty:
-                limiting_result = valid_results.loc[valid_results["Planning_Area_sqft"].astype(float).idxmin()]
-                limiting_area_results = valid_results[
-                    valid_results["Is_Limiting_Band"].fillna(False)
-                ]
-                total_required_radios = int(
-                    pd.to_numeric(
-                        limiting_area_results["Number_of_required_DOTs_Radios"],
-                        errors="coerce",
-                    ).fillna(0).sum()
+            equipment_summary = summarize_building_equipment(coverage_result_df)
+            if equipment_summary["Total_Required_DOTs_Radios"] > 0:
+                average_col, dot_col, iru_col, bbu_col = st.columns(4)
+                average_col.metric(
+                    "Average sq ft / DOT",
+                    f"{equipment_summary['Average_sqft_per_DOT_Radio']:,.0f}",
                 )
-                st.info(
-                    f"Limiting result: {limiting_result['Coverage_Type']} on {limiting_result['Band']} - "
-                    f"{limiting_result['Sub_Type']} - {limiting_result['Planning_Area_sqft']:,.0f} sq ft planning coverage. "
-                    f"Total required DOTs/Radios: {total_required_radios}."
+                dot_col.metric(
+                    "Total required DOTs/Radios",
+                    f"{equipment_summary['Total_Required_DOTs_Radios']:,}",
+                )
+                iru_col.metric("Total IRUs", f"{equipment_summary['Total_IRUs']:,}")
+                bbu_col.metric("Total BBUs", f"{equipment_summary['Total_BBUs']:,}")
+                st.caption(
+                    "Average sq ft / DOT equals total modeled building area divided by total required radios. "
+                    "IRUs are rounded up at 7 DOTs/Radios per IRU; BBUs are rounded up at 12 IRUs per BBU."
                 )
             else:
-                st.warning("No model-valid limiting result is available. Review the frequency, distance-range, and calculation warnings.")
+                st.warning("No model-valid building equipment summary is available for these results.")
 
-            display_coverage_df = coverage_result_df.copy()
-            display_round_columns = [
-                "Frequency_MHz", "MAPL_Before_Margin_dB", "Margin_dB", "Additional_Loss_dB",
-                "Usable_MAPL_dB", "Coverage_Radius_m", "Coverage_Diameter_m", "Ideal_Area_m2",
-                "Ideal_Area_sqft", "Area_Efficiency", "Planning_Area_m2", "Planning_Area_sqft",
-                "Area_Coverage_sqft",
-            ]
-            for column in display_round_columns:
-                display_coverage_df[column] = pd.to_numeric(display_coverage_df[column], errors="coerce").round(2)
-            display_coverage_df = display_coverage_df.rename(columns={
-                "Area_Coverage_sqft": "Coverage area (sq ft)",
-                "Number_of_required_DOTs_Radios": "Number of required DOTs/Radios",
-            })
-            st.dataframe(display_coverage_df, width="stretch", hide_index=True)
 
-            warning_rows = coverage_result_df.loc[
-                coverage_result_df["Warnings"].fillna("").astype(str).str.len() > 0,
-                ["Sub_Type", "Warnings"],
-            ].drop_duplicates()
-            if not warning_rows.empty:
-                with st.expander("Coverage Warnings"):
-                    for _, warning_row in warning_rows.iterrows():
-                        st.warning(f"{warning_row['Sub_Type']}: {warning_row['Warnings']}")
     else:
         st.caption("Select General Building Type and Building Category to view the associated structure details.")
 else:
