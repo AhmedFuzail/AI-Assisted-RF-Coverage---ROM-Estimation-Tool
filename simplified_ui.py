@@ -487,6 +487,13 @@ def get_filtered_step_options(step, intake_data):
         return [band for band in options if band in supported and band in allowed]
     return options
 
+def clear_cached_rf_results():
+    st.session_state.mapl_result = None
+    st.session_state.mapl_result_df = None
+    st.session_state.mapl_result_error = ""
+    st.session_state.coverage_result_df = None
+    st.session_state.coverage_result_error = ""
+
 if "rf_intake_step" not in st.session_state:
     st.session_state.rf_intake_step = 0
 if "rf_intake_data" not in st.session_state:
@@ -628,6 +635,7 @@ if st.session_state.rf_intake_step < total_steps:
                 total_sqft_value = float(str(step_value).replace(",", ""))
                 if total_sqft_value <= 0:
                     raise ValueError
+                clear_cached_rf_results()
                 st.session_state.rf_intake_data[current_step["key"]] = f"{total_sqft_value:.0f}"
                 st.session_state.rf_intake_step += 1
                 st.rerun()
@@ -638,6 +646,7 @@ if st.session_state.rf_intake_step < total_steps:
                 floor_count = int(str(step_value).replace(",", "").strip())
                 if floor_count <= 0:
                     raise ValueError
+                clear_cached_rf_results()
                 st.session_state.rf_intake_data[current_step["key"]] = floor_count
                 st.session_state.rf_intake_step += 1
                 st.rerun()
@@ -646,6 +655,7 @@ if st.session_state.rf_intake_step < total_steps:
         else:
             if current_step["type"] == "text":
                 cleaned_value = str(step_value).strip()
+            clear_cached_rf_results()
             st.session_state.rf_intake_data[current_step["key"]] = cleaned_value
             if current_step["key"] == "Building_type":
                 saved_category = st.session_state.rf_intake_data.get("Building_category")

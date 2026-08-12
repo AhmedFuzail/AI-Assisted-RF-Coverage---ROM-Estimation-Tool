@@ -155,6 +155,7 @@ RESULT_COLUMNS = [
     "MAPL_Before_Margin_dB", "Margin_dB", "Additional_Loss_dB", "Usable_MAPL_dB",
     "ITU_Environment", "ITU_Condition", "Environment_Mapping_Reason", "Condition_Reason",
     "Alpha", "Beta", "Gamma", "Sigma_dB", "Coverage_Radius_m", "Coverage_Diameter_m",
+    "Planning_Coverage_Radius_m", "Coverage_Capped_To_Model_Range",
     "Ideal_Area_m2", "Ideal_Area_sqft", "Area_Efficiency", "Planning_Area_m2",
     "Planning_Area_sqft", "Number_of_required_DOTs_Radios",
     "Environment_Mapping_Confidence", "Condition_Confidence",
@@ -551,17 +552,26 @@ def convert_mapl_to_coverage(
     if not math.isfinite(radius_m) or radius_m <= 0:
         raise ValueError("Calculated coverage radius is nonphysical.")
 
-    ideal_area_m2 = math.pi * radius_m ** 2
-    planning_area_m2 = ideal_area_m2 * efficiency
     frequency_range = coefficients["frequency_ghz"]
     distance_range = coefficients["distance_m"]
     frequency_valid = frequency_range[0] <= frequency_ghz <= frequency_range[1]
     distance_valid = distance_range[0] <= radius_m <= distance_range[1]
+    planning_radius_m = radius_m
+    coverage_capped = False
     warnings = []
     if not frequency_valid:
         warnings.append(f"Frequency {frequency_ghz:.3f} GHz is outside the ITU model range {frequency_range[0]}-{frequency_range[1]} GHz.")
-    if not distance_valid:
+    if radius_m > distance_range[1]:
+        planning_radius_m = float(distance_range[1])
+        coverage_capped = True
+        warnings.append(
+            f"Calculated radius {radius_m:.2f} m exceeds the ITU model range; "
+            f"planning coverage was capped at {planning_radius_m:.2f} m."
+        )
+    elif radius_m < distance_range[0]:
         warnings.append(f"Calculated radius {radius_m:.2f} m is outside the ITU model range {distance_range[0]}-{distance_range[1]} m.")
+    ideal_area_m2 = math.pi * radius_m ** 2
+    planning_area_m2 = math.pi * planning_radius_m ** 2 * efficiency
     if radius_m > 1000 or planning_area_m2 * SQFT_PER_M2 > 10_000_000:
         warnings.append("Calculated coverage is extreme and should not be used for planning without calibration.")
 
@@ -573,6 +583,8 @@ def convert_mapl_to_coverage(
         "Sigma_dB": coefficients["sigma_db"],
         "Coverage_Radius_m": radius_m,
         "Coverage_Diameter_m": radius_m * 2.0,
+        "Planning_Coverage_Radius_m": planning_radius_m,
+        "Coverage_Capped_To_Model_Range": coverage_capped,
         "Ideal_Area_m2": ideal_area_m2,
         "Ideal_Area_sqft": ideal_area_m2 * SQFT_PER_M2,
         "Planning_Area_m2": planning_area_m2,
@@ -722,7 +734,13 @@ def calculate_building_coverage(record, mapl_result, margin_db=6.0, overrides=No
     }
     result.update(coverage)
     result["Calculation_Status"] = "warning" if warnings and coverage["Calculation_Status"] == "ok" else coverage["Calculation_Status"]
-    result["Result_Valid_For_Planning"] = bool(coverage["Frequency_Range_Valid"] and coverage["Distance_Range_Valid"])
+    result["Result_Valid_For_Planning"] = bool(
+        coverage["Frequency_Range_Valid"]
+        and (
+            coverage["Distance_Range_Valid"]
+            or coverage["Coverage_Capped_To_Model_Range"]
+        )
+    )
     return result
 
 

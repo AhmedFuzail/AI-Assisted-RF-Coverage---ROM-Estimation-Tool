@@ -179,6 +179,25 @@ class CoverageEngineTests(unittest.TestCase):
         self.assertFalse(result["Distance_Range_Valid"])
         self.assertEqual(result["Calculation_Status"], "warning_extrapolated")
 
+        self.assertTrue(result["Coverage_Capped_To_Model_Range"])
+        self.assertEqual(result["Planning_Coverage_Radius_m"], 27.0)
+        self.assertAlmostEqual(
+            result["Planning_Area_m2"],
+            math.pi * 27.0 ** 2 * 0.80,
+        )
+
+    def test_capped_coverage_remains_valid_for_equipment_planning(self):
+        result = calculate_building_coverage(
+            open_office(**{"Coverage Area": 100_000}),
+            mapl(frequency_mhz=1900),
+            margin_db=6,
+        )
+        self.assertFalse(result["Distance_Range_Valid"])
+        self.assertTrue(result["Coverage_Capped_To_Model_Range"])
+        self.assertTrue(result["Result_Valid_For_Planning"])
+        self.assertGreater(result["Number_of_required_DOTs_Radios"], 0)
+        self.assertIn("planning coverage was capped", result["Warnings"])
+
     def test_margin_change_is_applied_once(self):
         baseline = convert_mapl_to_coverage(80, 3700, "industrial", "nlos", margin_db=6, area_efficiency=0.50)
         higher_margin = convert_mapl_to_coverage(80, 3700, "industrial", "nlos", margin_db=10, area_efficiency=0.50)

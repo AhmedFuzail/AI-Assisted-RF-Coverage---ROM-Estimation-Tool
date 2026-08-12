@@ -82,6 +82,32 @@ class BuildingEquipmentSummaryTests(unittest.TestCase):
         self.assertEqual(summary["Total_IRUs"], 1)
         self.assertEqual(summary["Total_BBUs"], 1)
 
+    def test_capped_area_rows_are_included_in_equipment_totals(self):
+        results = pd.DataFrame([
+            {
+                "Area_Coverage_sqft": 55_000,
+                "Planning_Area_sqft": 18_000,
+                "Number_of_required_DOTs_Radios": 4,
+                "Result_Valid_For_Planning": True,
+                "Is_Limiting_Band": True,
+                "Coverage_Capped_To_Model_Range": False,
+            },
+            {
+                "Area_Coverage_sqft": 45_000,
+                "Planning_Area_sqft": 20_000,
+                "Number_of_required_DOTs_Radios": 3,
+                "Result_Valid_For_Planning": True,
+                "Is_Limiting_Band": True,
+                "Coverage_Capped_To_Model_Range": True,
+            },
+        ])
+
+        summary = summarize_building_equipment(results)
+
+        self.assertEqual(summary["Total_Coverage_Area_sqft"], 100_000)
+        self.assertEqual(summary["Total_Required_DOTs_Radios"], 7)
+        self.assertEqual(summary["Total_IRUs"], 1)
+
     def test_conversion_ratios_must_be_positive(self):
         results = pd.DataFrame(columns=[
             "Area_Coverage_sqft",
