@@ -64,12 +64,12 @@ Unsupported model/band/technology combinations, out-of-range frequencies, invali
 | `Operator_type` plus `Coverage_type` | `technology` |
 | RF reference row | `duplex_mode`, `tx_branch_count`, default power, antenna gain, frequency range |
 | Advanced frequency override or range midpoint | `carrier_frequency_mhz` |
-| Current LTE/NR defaults | `bandwidth_mhz`, `scs_khz` |
+| Band-specific air-interface defaults | `bandwidth_mhz`, `scs_khz` |
 | `Max_lim_channel_count` | `carrier_count` |
 | `target_rsrp` | `target_rsrp_dbm` |
 | Hidden Streamlit design policy | `margin_db` |
 
-LTE currently defaults to 20 MHz. NR currently defaults to 40 MHz at 30 kHz SCS. The live Streamlit workflow currently passes a hidden fixed 18 dB design margin. These values are centralized in the MAPL configuration mapping so later intake fields can replace them without changing the RF formula.
+LTE currently defaults to 20 MHz. NR currently defaults to 40 MHz at 30 kHz SCS. The live Streamlit workflow currently passes a hidden fixed 14 dB design margin. These values are centralized in the MAPL configuration mapping so later intake fields can replace them without changing the RF formula.
 
 ## Power and MAPL Rules
 
@@ -87,9 +87,9 @@ The current ROM fixes highest-band channel count to one. When more than one oper
 per_operator_tx_power_dbm = total_tx_power_dbm_per_branch - 10 * log10(operator_count)
 ```
 
-No sharing loss is applied when operator count is one. A validated user transmit-power override takes precedence over the table default and is identified in output. Numeric transmit-power values come directly from the CSV. The current Micro Radio rows use 37 dBm (5 W) per branch. B48 selections return a warning because SAS-authorized EIRP or PSD constraints may reduce actual CBRS power; no unverified reduction is invented. Antenna assumptions in `power_note` remain visible engineering context.
+No sharing loss is applied when operator count is one. A validated user transmit-power override normally takes precedence over the table default and is identified in output. Power is first divided equally across operators. The resulting per-branch power is then capped at 23 dBm for DOT 4459 in Enterprise Private 5G and Enterprise 5G Coverage, and at 24 dBm for DOT 4455 on N77 in Enterprise 5G Coverage. Numeric transmit-power values come directly from the CSV. The current Micro Radio rows use 37 dBm (5 W) per branch. B48 selections return a warning because SAS-authorized EIRP or PSD constraints may reduce actual CBRS power; no unverified reduction is invented. Antenna assumptions in `power_note` remain visible engineering context.
 
-MAPL uses the existing LTE and NR resource-block tables. Antenna gain is included in branch EIRP exactly once. `MAPL_Before_Margin_dB` is passed to the coverage engine, where the selected design margin is applied exactly once; transmit power and antenna gain are not added again in coverage.
+Bandwidth defaults are 80 MHz for N77/B77 variants, 20 MHz for B25/B66 in LTE or NR, 20 MHz for other LTE bands, and 40 MHz for other NR bands. Explicit validated bandwidth inputs take precedence. MAPL uses the existing LTE and NR resource-block tables. Antenna gain is included in branch EIRP exactly once. `MAPL_Before_Margin_dB` is passed to the coverage engine, where the selected design margin is applied exactly once; transmit power and antenna gain are not added again in coverage.
 
 ## Examples
 
@@ -144,7 +144,7 @@ characteristics = get_radio_dot_characteristics(
 
 The Streamlit model, variant, band, power, branch count, antenna gain, duplex mode, and operating range now come from the CSV for both Radio Dot and Micro Radio selections. Micro Radio coverage counts are calculated, but IRU/BBU conversion is intentionally not displayed because the RF table does not define a Micro Radio-to-baseband equipment ratio.
 
-For DOT-IRU-BBU selections, Enterprise Private 5G exposes DOT 4459 only; Enterprise 5G Coverage exposes DOT 2274 and DOT 4455 only. Coverage Focused equipment summaries use 7 DOTs per IRU, while Capacity Focused summaries use 5.5 DOTs per IRU. The guided intake supports targeted field edits after completion and recalculates dependent selections when an upstream answer changes.
+For DOT-IRU-BBU selections, Enterprise Private 5G exposes DOT 4459 only; Enterprise 5G Coverage exposes DOT 2274, DOT 4455, and DOT 4459. Coverage Focused equipment summaries use 7 DOTs per IRU, while Capacity Focused summaries use 5.5 DOTs per IRU. The guided intake supports targeted field edits after completion and recalculates dependent selections when an upstream answer changes.
 
 ## Extending the Table
 

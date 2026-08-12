@@ -12,6 +12,7 @@ from radio_reference import (
     RADIO_REFERENCE_PATH,
     build_radio_mapl_config,
     calculate_mapl,
+    default_bandwidth_mhz,
     get_radio_dot_characteristics,
     get_radio_dot_models,
     load_radio_dot_reference,
@@ -140,6 +141,35 @@ class RadioReferenceTests(unittest.TestCase):
         self.assertEqual(normalize_band("B4/B66"), "B66")
         self.assertEqual(normalize_band("N77/C-Band"), "B77D")
 
+    def test_band_specific_default_bandwidths(self):
+        self.assertEqual(default_bandwidth_mhz("N77/C-Band", "NR"), 80.0)
+        self.assertEqual(default_bandwidth_mhz("B77G", "5G"), 80.0)
+        self.assertEqual(default_bandwidth_mhz("B25", "LTE"), 20.0)
+        self.assertEqual(default_bandwidth_mhz("B25", "NR"), 20.0)
+        self.assertEqual(default_bandwidth_mhz("B66", "4G"), 20.0)
+        self.assertEqual(default_bandwidth_mhz("B66", "5G"), 20.0)
+        self.assertEqual(default_bandwidth_mhz("B48", "NR"), 40.0)
+
+        n77 = radio_config("DOT 4459", None, "B77D", "NR")
+        b25_lte = radio_config("DOT 2274", None, "B25", "LTE")
+        b25_nr = radio_config("DOT 2274", None, "B25", "NR")
+        b66_lte = radio_config("DOT 2274", None, "B66", "LTE")
+        b66_nr = radio_config("DOT 2274", None, "B66", "NR")
+        explicit_override = radio_config(
+            "DOT 4459",
+            None,
+            "B77D",
+            "NR",
+            bandwidth_mhz=40,
+        )
+
+        self.assertEqual(n77.bandwidth_mhz, 80.0)
+        self.assertEqual(b25_lte.bandwidth_mhz, 20.0)
+        self.assertEqual(b25_nr.bandwidth_mhz, 20.0)
+        self.assertEqual(b66_lte.bandwidth_mhz, 20.0)
+        self.assertEqual(b66_nr.bandwidth_mhz, 20.0)
+        self.assertEqual(explicit_override.bandwidth_mhz, 40.0)
+
     def test_user_tx_power_overrides_table_default(self):
         config = radio_config(
             "DOT 4459",
@@ -152,6 +182,90 @@ class RadioReferenceTests(unittest.TestCase):
         self.assertEqual(result["Configured_Tx_Power_dBm_per_Branch"], 20)
         self.assertIn("configured_tx_power_dbm_per_branch", result["Override_Fields"])
         self.assertIn("user-configured", result["Warnings"])
+
+    def test_dot_4459_power_cap_is_applied_after_operator_sharing(self):
+        public = calculate_mapl(radio_config(
+            "DOT 4459", None, "B41K", "NR",
+            Operator_type="Enterprise 5G Coverage",
+        ))
+        private = calculate_mapl(radio_config(
+            "DOT 4459", None, "B48", "NR",
+            Operator_type="Enterprise Private 5G",
+        ))
+        public_shared = calculate_mapl(radio_config(
+            "DOT 4459", None, "B41K", "NR",
+            Operator_type="Enterprise 5G Coverage",
+            Operator_count=2,
+        ))
+        private_shared = calculate_mapl(radio_config(
+            "DOT 4459", None, "B48", "NR",
+            Operator_type="Enterprise Private 5G",
+            Operator_count=2,
+        ))
+        override_shared = calculate_mapl(radio_config(
+            "DOT 4459", None, "B41K", "NR",
+            Operator_type="Enterprise 5G Coverage",
+            Operator_count=2,
+            configured_tx_power_dbm_per_branch=30,
+        ))
+        lower_power = calculate_mapl(radio_config(
+            "DOT 4459", None, "B41K", "NR",
+            Operator_type="Enterprise 5G Coverage",
+            configured_tx_power_dbm_per_branch=20,
+        ))
+
+        self.assertEqual(public["Configured_Tx_Power_dBm_per_Branch"], 26)
+        self.assertEqual(private["Configured_Tx_Power_dBm_per_Branch"], 26)
+        self.assertEqual(public["Effective_Tx_Power_dBm_per_Branch"], 23)
+        self.assertEqual(private["Effective_Tx_Power_dBm_per_Branch"], 23)
+        expected_shared_power = 26 - 10 * math.log10(2)
+        self.assertAlmostEqual(
+            public_shared["Effective_Tx_Power_dBm_per_Branch"],
+            expected_shared_power,
+            places=9,
+        )
+        self.assertAlmostEqual(
+            private_shared["Effective_Tx_Power_dBm_per_Branch"],
+            expected_shared_power,
+            places=9,
+        )
+        self.assertEqual(override_shared["Effective_Tx_Power_dBm_per_Branch"], 23)
+        self.assertEqual(lower_power["Effective_Tx_Power_dBm_per_Branch"], 20)
+        self.assertIn("after operator power sharing", public["Warnings"].lower())
+        self.assertEqual(
+            public["Power_Source"],
+            "Deployment power cap applied after operator sharing",
+        )
+
+    def test_enterprise_coverage_dot_4455_n77_cap_is_after_sharing(self):
+        single_operator = calculate_mapl(radio_config(
+            "DOT 4455", "KRY 901 523/1", "B77D", "NR",
+            Operator_type="Enterprise 5G Coverage",
+        ))
+        two_operators = calculate_mapl(radio_config(
+            "DOT 4455", "KRY 901 523/1", "B77D", "NR",
+            Operator_type="Enterprise 5G Coverage",
+            Operator_count=2,
+        ))
+        private = calculate_mapl(radio_config(
+            "DOT 4455", "KRY 901 523/1", "B77D", "NR",
+            Operator_type="Enterprise Private 5G",
+        ))
+        public_b66 = calculate_mapl(radio_config(
+            "DOT 4455", "KRY 901 523/1", "B66", "NR",
+            Operator_type="Enterprise 5G Coverage",
+        ))
+
+        self.assertEqual(single_operator["Configured_Tx_Power_dBm_per_Branch"], 26)
+        self.assertEqual(single_operator["Effective_Tx_Power_dBm_per_Branch"], 24)
+        self.assertAlmostEqual(
+            two_operators["Effective_Tx_Power_dBm_per_Branch"],
+            26 - 10 * math.log10(2),
+            places=9,
+        )
+        self.assertEqual(private["Effective_Tx_Power_dBm_per_Branch"], 26)
+        self.assertEqual(public_b66["Effective_Tx_Power_dBm_per_Branch"], 23)
+        self.assertIn("DOT 4455 N77", single_operator["Warnings"])
 
     def test_antenna_gain_is_added_exactly_once(self):
         config = radio_config("DOT 2274", None, "B25", "LTE")
@@ -252,11 +366,11 @@ class RadioReferenceTests(unittest.TestCase):
         cases = [
             ("DOT 2274", None, "B25", "LTE", 88.50818753952376),
             ("DOT 4455", "KRY 901 523/1", "B66", "LTE", 91.50818753952376),
-            ("DOT 4455", "KRY 901 523/1", "B77D", "NR", 94.25512888687605),
+            ("DOT 4455", "KRY 901 523/1", "B77D", "NR", 91.14359020103846),
             ("DOT 4459", None, "B48", "NR", 95.25512888687605),
-            ("DOT 4459", None, "B77D", "NR", 95.35512888687605),
+            ("DOT 4459", None, "B77D", "NR", 92.24359020103846),
             ("Micro Radio 4402", None, "B25", "LTE", 110.40818753952375),
-            ("Micro Radio 4402", None, "B66", "NR", 109.45512888687605),
+            ("Micro Radio 4402", None, "B66", "NR", 112.63248577854438),
             ("Micro Radio 4408", None, "B48", "NR", 113.01512888687606),
         ]
         for model, variant, band, technology, expected_mapl in cases:

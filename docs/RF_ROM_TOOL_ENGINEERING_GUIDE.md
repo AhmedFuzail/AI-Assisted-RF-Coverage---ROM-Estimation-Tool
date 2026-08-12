@@ -134,7 +134,7 @@ mapl_result = calculate_mapl(radio_config)
 For each area row, the application calls:
 
 ```python
-calculate_building_coverage(area_record, mapl_result, margin_db=18.0)
+calculate_building_coverage(area_record, mapl_result, margin_db=14.0)
 ```
 
 The batch wrapper repeats the calculation for every area and every supplied MAPL result:
@@ -143,7 +143,7 @@ The batch wrapper repeats the calculation for every area and every supplied MAPL
 calculate_coverage_for_all_buildings(
     building_df,
     mapl_results,
-    margin_db=18.0,
+    margin_db=14.0,
     overrides=coverage_overrides,
 )
 ```
@@ -185,7 +185,7 @@ The table below separates active calculation inputs from values collected for wo
 | One compatible hardware variant | Hardware-variant question is auto-filled and skipped; multiple variants remain selectable with supported bands shown |
 | Public coverage workflow | Target RSRP question is skipped; calculation currently falls back to -95 dBm |
 | Private 5G + DOT-IRU-BBU | DOT 4459 is the only Radio Model option |
-| Enterprise 5G Coverage + DOT-IRU-BBU | DOT 2274 and DOT 4455 are the only Radio Model options |
+| Enterprise 5G Coverage + DOT-IRU-BBU | DOT 2274, DOT 4455, and DOT 4459 are available; after operator sharing, DOT 4459 is capped at 23 dBm/branch and DOT 4455 N77 at 24 dBm/branch |
 
 ### 5.2 Dependent radio selectors
 
@@ -309,10 +309,10 @@ dot_model + dot_variant_kry + band + supported technology + duplex mode
 | Model / KRY | Bands | Technology | Default power per branch | Tx branches |
 | --- | --- | --- | ---: | ---: |
 | DOT 4455 / KRY 901 523/1 | B25, B66 | LTE/NR | 23 dBm | 2 |
-| DOT 4455 / KRY 901 523/1 | B77D | NR | 24 dBm | 4 |
-| DOT 4455 / KRY 901 551/1 | B41 | LTE/NR | 24 dBm | 2 |
-| DOT 4455 / KRY 901 551/1 | B77G | NR | 24 dBm | 2 |
-| DOT 4455 / KRY 901 551/1 | B77D | NR | 24 dBm | 4 |
+| DOT 4455 / KRY 901 523/1 | B77D | NR | 26 dBm | 4 |
+| DOT 4455 / KRY 901 551/1 | B41 | LTE/NR | 26 dBm | 2 |
+| DOT 4455 / KRY 901 551/1 | B77G | NR | 26 dBm | 2 |
+| DOT 4455 / KRY 901 551/1 | B77D | NR | 26 dBm | 4 |
 | DOT 4459 / KRY 901 502/1 | B41K | LTE/NR | 26 dBm | 4 |
 | DOT 4459 / KRY 901 516/1 | B48 | LTE/NR | 26 dBm | 4 |
 | DOT 4459 / KRY 901 515/1 | B77D | NR | 26 dBm | 4 |
@@ -373,7 +373,7 @@ DOT 4459 B48 returns this warning:
 Actual CBRS power may be lower because of SAS-authorized EIRP or PSD limits.
 ```
 
-The tool does not invent a SAS reduction. The engineer must override power when an authorized or design-specific value is known.
+The tool does not calculate a dynamic SAS authorization limit. After operator sharing, it applies a fixed 23 dBm-per-branch cap whenever DOT 4459 is used for Enterprise Private 5G or Enterprise 5G Coverage. It also applies a 24 dBm-per-branch cap to DOT 4455 N77 for Enterprise 5G Coverage. A lower authorized or design-specific override remains unchanged.
 
 ## 8. Minimal Radio MAPL Schema
 
@@ -387,7 +387,7 @@ The tool does not invent a SAS reduction. The engineer must override power when 
 | `technology` | `resolve_technology(Operator_type, Coverage_type)` | LTE/NR |
 | `duplex_mode` | Radio reference row | FDD/TDD |
 | `carrier_frequency_mhz` | Override or reference midpoint | MHz |
-| `bandwidth_mhz` | Current UI default: LTE 20, NR 40 | MHz |
+| `bandwidth_mhz` | Band default: N77/B77 80; B25/B66 20; other LTE 20; other NR 40 | MHz |
 | `scs_khz` | LTE uses 15; current NR default is 30 | kHz |
 | `tx_branch_count` | Radio reference row | count |
 | `configured_tx_power_dbm_per_branch` | Advanced override or reference default | dBm/branch |
@@ -396,7 +396,7 @@ The tool does not invent a SAS reduction. The engineer must override power when 
 | `power_share_count` | `Operator_count` | count |
 | `power_is_total_across_carriers` | Derived `power_sharing`, true when operator count is greater than 1 | boolean |
 | `target_rsrp_dbm` | Target RSRP or current -95 dBm fallback | dBm |
-| `margin_db` | Hidden current UI policy value | **18 dB** |
+| `margin_db` | Centralized hidden current UI policy value | **14 dB** |
 
 Value precedence is:
 
@@ -413,12 +413,12 @@ validated user override
 
 | Parameter | LTE | NR |
 | --- | ---: | ---: |
-| Bandwidth | 20 MHz | 40 MHz |
+| Bandwidth | B25/B66 and other LTE: 20 MHz | N77/B77: 80 MHz; B25/B66: 20 MHz; other NR: 40 MHz |
 | SCS | 15 kHz | 30 kHz |
 | Target RSRP when no user value exists | -95 dBm | -95 dBm |
-| Design margin passed by Streamlit | 18 dB | 18 dB |
+| Design margin passed by Streamlit | 14 dB | 14 dB |
 
-The underlying typed schema still defines a generic 6 dB default for callers that omit margin. The current Streamlit application explicitly passes 18 dB, so live UI calculations use 18 dB.
+The underlying typed schema still defines a generic 6 dB default for callers that omit margin. Both Streamlit applications import `STREAMLIT_DESIGN_MARGIN_DB = 14.0`, so live UI calculations use 14 dB.
 
 ### 9.2 Resource block tables
 
@@ -462,12 +462,15 @@ Operator_Power_Sharing_Loss_dB = 10 * log10(Operator_Count)
 ```
 
 ```text
-Effective_Tx_Power_dBm_per_Branch
+Shared_Tx_Power_dBm_per_Branch
     = Configured_Tx_Power_dBm_per_Branch
     - Operator_Power_Sharing_Loss_dB
+
+Effective_Tx_Power_dBm_per_Branch
+    = min(Shared_Tx_Power_dBm_per_Branch, Applicable_Model_Deployment_Cap)
 ```
 
-The output retains the internal key `Carrier_Sharing_Loss_dB` for backward compatibility, and also reports `Power_Share_Count`. Carrier count remains one and is not substituted for operator count.
+The output retains the internal key `Carrier_Sharing_Loss_dB` for backward compatibility and also reports `Power_Share_Count`. Carrier count remains one and is not substituted for operator count. Model/deployment caps are evaluated only after this sharing reduction.
 
 ### 9.4 Branch EIRP
 
@@ -744,7 +747,7 @@ This avoids adding multiple band results for the same area when per-band calcula
 | Control | Internal variable | Effect |
 | --- | --- | --- |
 | Override carrier frequency | `carrier_frequency_mhz` | Replaces reference midpoint after range validation |
-| Override Tx power per branch | `configured_tx_power_dbm_per_branch` | Replaces Radio Dot default; output records the override |
+| Override Tx power per branch | `configured_tx_power_dbm_per_branch` | Replaces the radio default; operator sharing is applied first, followed by any DOT 4459 or DOT 4455 N77 cap |
 | Power is total across carriers | `power_is_total_across_carriers` | Subtracts `10*log10(carrier_count)` |
 
 Antenna gain is not editable in the standard UI.
@@ -774,7 +777,7 @@ Manual choices appear in `Override_Fields` and use `Manual Override` confidence 
 | `Bandwidth_MHz`, `SCS_kHz`, `RB_Count` | Air-interface resource configuration | MHz, kHz, RB |
 | `Tx_Branch_Count` | Hardware branch count | count |
 | `Configured_Tx_Power_dBm_per_Branch` | Selected per-branch power before optional sharing | dBm |
-| `Effective_Tx_Power_dBm_per_Branch` | Per-carrier branch power after sharing | dBm |
+| `Effective_Tx_Power_dBm_per_Branch` | Per-carrier branch power after sharing and any applicable deployment cap | dBm |
 | `Antenna_Gain_dBi` | Integrated antenna gain | dBi |
 | `Branch_EIRP_dBm` | Effective branch power plus antenna gain | dBm |
 | `Power_Per_RE_dBm` | EIRP distributed over modeled subcarriers | dBm/RE |
@@ -820,7 +823,7 @@ Assumptions:
 - Industrial NLOS area
 - Complex layout and clutter-derived efficiency 0.42
 - Area allocation 50,000 sq ft
-- Fixed margin 18 dB
+- Fixed margin 14 dB
 
 Step 1:
 
@@ -837,10 +840,10 @@ Step 2 using industrial NLOS coefficients:
 alpha = 2.80
 beta = 23.55
 gamma = 2.16
-Usable MAPL = 88.5082 - 18 = 70.5082 dB
-Coverage radius = 28.2616 m
-Planning coverage = 11,343.91 sq ft/radio
-Required radios = ceil(50,000 / 11,343.91) = 5
+Usable MAPL = 88.5082 - 14 = 74.5082 dB
+Coverage radius = 39.2693 m
+Planning coverage = 21,901.62 sq ft/radio
+Required radios = ceil(50,000 / 21,901.62) = 3
 ```
 
 The calculated radius is within the industrial NLOS supported range of 3-110 m.
@@ -849,36 +852,36 @@ The calculated radius is within the industrial NLOS supported range of 3-110 m.
 
 Assumptions:
 
-- DOT 4459, KRY 901 516/1
-- B48 at midpoint 3625 MHz
+- DOT 4459, KRY 901 502/1 selected for Enterprise 5G Coverage
+- B41K at midpoint 2595 MHz
 - NR 40 MHz, 30 kHz SCS, 106 RB
-- 26 dBm per branch
-- 5.3 dBi antenna gain
+- 23 dBm per branch after the Enterprise 5G Coverage SAS policy cap
+- 5.5 dBi antenna gain
 - Target RSRP -95 dBm
 - Industrial NLOS area
 - Complex layout and clutter-derived efficiency 0.42
 - Area allocation 50,000 sq ft
-- Fixed margin 18 dB
+- Fixed margin 14 dB
 
 Step 1:
 
 ```text
-Branch EIRP = 26.0 + 5.3 = 31.3 dBm
+Branch EIRP = 23.0 + 5.5 = 28.5 dBm
 Total subcarriers = 12 * 106 = 1272
-Power per RE = 31.3 - 10*log10(1272) = 0.2551 dBm/RE
-MAPL before margin = 0.2551 - (-95) = 95.2551 dB
+Power per RE = 28.5 - 10*log10(1272) = -2.5449 dBm/RE
+MAPL before margin = -2.5449 - (-95) = 92.4551 dB
 ```
 
 Step 2:
 
 ```text
-Usable MAPL = 95.2551 - 18 = 77.2551 dB
-Coverage radius = 30.6601 m
-Planning coverage = 13,351.05 sq ft/radio
-Required radios = ceil(50,000 / 13,351.05) = 4
+Usable MAPL = 92.4551 - 14 = 78.4551 dB
+Coverage radius = 43.7945 m
+Planning coverage = 27,240.14 sq ft/radio
+Required radios = ceil(50,000 / 27,240.14) = 2
 ```
 
-The result also carries the CBRS/SAS warning. No SAS power reduction is included unless the user overrides power.
+The result carries the Enterprise 5G Coverage power-policy warning. The policy cap is applied after any operator-sharing reduction.
 
 ## 15. Validation and Warning Logic
 
@@ -1011,8 +1014,8 @@ only after both engines have defined units and scope consistently.
 
 ## 18. Current Limitations and Engineering Gaps
 
-1. **Fixed UI margin:** The current live Streamlit workflow uses a hidden 18 dB margin.
-2. **Fixed bandwidth/SCS:** LTE uses 20 MHz; NR uses 40 MHz at 30 kHz SCS.
+1. **Fixed UI margin:** The current live Streamlit workflow uses a centralized hidden 14 dB margin.
+2. **Band-default bandwidth/SCS:** N77/B77 uses 80 MHz; B25/B66 uses 20 MHz for LTE or NR; other LTE uses 20 MHz and other NR uses 40 MHz. NR uses 30 kHz SCS.
 3. **Public target RSRP:** Enterprise 5G Coverage currently falls back to -95 dBm because its target question is skipped.
 4. **Micro equipment chain:** Micro 4402/4408 RF characteristics and radio counts are supported, but IRU/BBU conversion is not shown because no Micro Radio-to-baseband ratio is defined.
 5. **Floors:** Number of floors does not affect coverage or radio count.
@@ -1022,7 +1025,7 @@ only after both engines have defined units and scope consistently.
 9. **Ceiling height:** High ceiling currently produces a warning but no dB correction.
 10. **Sigma:** ITU sigma is reported but not directly applied.
 11. **Floorplan geometry:** Area efficiency is a scalar approximation; no polygon, wall-object or corridor-routing model is used.
-12. **SAS:** CBRS authorization limits are not calculated.
+12. **SAS:** Dynamic SAS authorization limits are not calculated; DOT 4459 uses a fixed 23 dBm-per-branch cap for both deployment types after operator sharing. Enterprise 5G Coverage DOT 4455 N77 uses a fixed 24 dBm-per-branch cap after sharing.
 13. **Multiple bands:** The engine supports multiple MAPL records, but the current UI runs one selected band at a time.
 14. **Location:** Address and coordinates do not select regulatory domain or propagation parameters.
 
@@ -1039,7 +1042,7 @@ only after both engines have defined units and scope consistently.
 | Required-radio count missing | Missing/negative area or nonpositive planning area | `Area_Coverage_sqft`, `Planning_Area_sqft`, warnings |
 | Area total differs from venue total | Subtype percentages do not sum to 100% | Building and Clutter Information editor |
 | Material losses appear but do not reduce radius | Intentional no-double-counting policy | `Loss_Calculation_Source` and warnings |
-| CBRS output may be optimistic | SAS authorization not modeled | Use validated power override |
+| CBRS output may be optimistic | Dynamic SAS authorization is not modeled | Use an authorized value at or below the applicable fixed policy cap |
 
 ## 20. RF and Python Glossary
 
@@ -1066,7 +1069,7 @@ only after both engines have defined units and scope consistently.
 2. Confirm the displayed frequency is appropriate, not only the range midpoint.
 3. Confirm per-branch power and any carrier-sharing interpretation.
 4. Review the CBRS warning where applicable.
-5. Confirm target RSRP and understand the fixed 18 dB margin.
+5. Confirm target RSRP and understand the fixed 14 dB margin.
 6. Confirm subtype percentages total 100%.
 7. Review each area environment, LOS/NLOS reason and confidence.
 8. Review any model frequency/distance extrapolation warning.

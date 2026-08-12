@@ -5,6 +5,7 @@ import pandas as pd
 
 from coverage_engine import (
     BAND_CENTER_FREQUENCY_MHZ,
+    STREAMLIT_DESIGN_MARGIN_DB,
     RESULT_COLUMNS,
     calculate_area_efficiency,
     calculate_building_coverage,
@@ -90,6 +91,9 @@ def mapl(technology="LTE", band="B2/B25", frequency_mhz=None, bandwidth_mhz=20, 
 
 
 class CoverageEngineTests(unittest.TestCase):
+
+    def test_streamlit_design_margin_policy_is_14_db(self):
+        self.assertEqual(STREAMLIT_DESIGN_MARGIN_DB, 14.0)
     def test_lte_20_mhz_at_1900_mhz(self):
         result = convert_mapl_to_coverage(90.2287874528, 1900, "office", "nlos", margin_db=6, area_efficiency=0.70)
         expected = 10 ** ((84.2287874528 - 30.13 - 24 * math.log10(1.9)) / 23.9)

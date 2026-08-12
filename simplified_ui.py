@@ -7,6 +7,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from coverage_engine import (
+    STREAMLIT_DESIGN_MARGIN_DB,
     calculate_coverage_for_all_buildings,
     resolve_technology,
     summarize_building_equipment,
@@ -14,6 +15,7 @@ from coverage_engine import (
 from radio_reference import (
     build_radio_mapl_config,
     calculate_mapl,
+    default_bandwidth_mhz,
     get_radio_dot_characteristics,
     get_radio_dot_variants,
     get_radio_dot_models,
@@ -461,7 +463,7 @@ def get_filtered_step_options(step, intake_data):
             if operator_type == "Enterprise Private 5G":
                 radio_options = [option for option in radio_options if option == "DOT 4459"]
             elif operator_type == "Enterprise 5G Coverage":
-                radio_options = [option for option in radio_options if option in {"DOT 2274", "DOT 4455"}]
+                radio_options = [option for option in radio_options if option in {"DOT 2274", "DOT 4455", "DOT 4459"}]
         technology = _intake_technology(intake_data)
         allowed_bands = _deployment_allowed_bands(intake_data)
         compatible_options = []
@@ -1047,7 +1049,7 @@ if st.session_state.rf_intake_step >= total_steps:
                 hide_index=True,
             )
 
-        margin_db = 18.0
+        margin_db = STREAMLIT_DESIGN_MARGIN_DB
 
         intake_data = st.session_state.rf_intake_data
         selected_radio_characteristics = None
@@ -1100,7 +1102,10 @@ if st.session_state.rf_intake_step >= total_steps:
                     radio_inputs["configured_tx_power_dbm_per_branch"] = configured_tx_power_override
                 calculated_defaults = {
                     "technology": technology,
-                    "bandwidth_mhz": 20 if technology == "LTE" else 40,
+                    "bandwidth_mhz": default_bandwidth_mhz(
+                        selected_radio_characteristics.band,
+                        technology,
+                    ),
                     "scs_khz": 30 if technology == "NR" else None,
                     "margin_db": margin_db,
                 }

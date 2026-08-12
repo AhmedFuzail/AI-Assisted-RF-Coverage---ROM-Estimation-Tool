@@ -7,10 +7,17 @@ from html import escape
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from coverage_engine import calculate_coverage_for_all_buildings, resolve_technology
+from coverage_engine import (
+    STREAMLIT_DESIGN_MARGIN_DB,
+    calculate_coverage_for_all_buildings,
+    resolve_technology,
+    summarize_building_equipment,
+)
 from radio_reference import (
+    apply_tx_power_policy,
     build_radio_mapl_config,
     calculate_mapl,
+    default_bandwidth_mhz,
     get_radio_dot_characteristics,
     get_radio_dot_variants,
     get_radio_dot_models,
@@ -468,7 +475,7 @@ def get_filtered_step_options(step, intake_data):
             if operator_type == "Enterprise Private 5G":
                 radio_options = [option for option in radio_options if option == "DOT 4459"]
             elif operator_type == "Enterprise 5G Coverage":
-                radio_options = [option for option in radio_options if option in {"DOT 2274", "DOT 4455"}]
+                radio_options = [option for option in radio_options if option in {"DOT 2274", "DOT 4455", "DOT 4459"}]
         technology = _intake_technology(intake_data)
         allowed_bands = _deployment_allowed_bands(intake_data)
         compatible_options = []
@@ -1041,7 +1048,7 @@ if st.session_state.rf_intake_step >= total_steps:
                 hide_index=True,
             )
 
-        margin_db = 18.0
+        margin_db = STREAMLIT_DESIGN_MARGIN_DB
 
         intake_data = st.session_state.rf_intake_data
         selected_radio_characteristics = None
@@ -1103,21 +1110,28 @@ if st.session_state.rf_intake_step >= total_steps:
                     st.info("Using user-configured Tx power instead of the radio reference default.")
 
 
-            configured_power = (
+            requested_power = (
                 float(configured_tx_power_override)
                 if configured_tx_power_override is not None
                 else selected_radio_characteristics.default_tx_power_dbm_per_branch
             )
             sharing_loss = 10 * math.log10(operator_count) if power_is_total_across_carriers else 0.0
-            branch_eirp = configured_power - sharing_loss + selected_radio_characteristics.antenna_gain_dbi
+            shared_power = requested_power - sharing_loss
+            effective_power, power_policy_warning = apply_tx_power_policy(
+                shared_power,
+                intake_data.get("Operator_type"),
+                selected_radio_characteristics.dot_model,
+                selected_radio_characteristics.band,
+            )
+            branch_eirp = effective_power + selected_radio_characteristics.antenna_gain_dbi
             selected_radio_df = pd.DataFrame([{
                 "Hardware variant": selected_radio_characteristics.dot_variant_kry,
                 "Duplex mode": selected_radio_characteristics.duplex_mode,
                 "Tx branches": selected_radio_characteristics.tx_branch_count,
                 "Default Tx power per branch": f"{selected_radio_characteristics.default_tx_power_dbm_per_branch:g} dBm",
-                "Configured Tx power per branch": f"{configured_power:g} dBm",
+                "Configured Tx power per branch": f"{requested_power:g} dBm",
                 "Operators sharing power": operator_count,
-                "Effective Tx power per branch": f"{configured_power - sharing_loss:.2f} dBm",
+                "Effective Tx power per branch": f"{effective_power:.2f} dBm",
                 "Antenna gain": f"{selected_radio_characteristics.antenna_gain_dbi:g} dBi",
                 "Branch EIRP": f"{branch_eirp:.2f} dBm",
                 "Operating-frequency range": (
@@ -1129,6 +1143,8 @@ if st.session_state.rf_intake_step >= total_steps:
             st.dataframe(selected_radio_df, width="content", hide_index=True)
             for warning in selected_radio_characteristics.warnings:
                 st.warning(warning)
+            if power_policy_warning:
+                st.warning(power_policy_warning)
         elif selected_radio_error:
             st.warning(selected_radio_error)
 
@@ -1206,7 +1222,10 @@ if st.session_state.rf_intake_step >= total_steps:
                     radio_inputs["configured_tx_power_dbm_per_branch"] = configured_tx_power_override
                 calculated_defaults = {
                     "technology": technology,
-                    "bandwidth_mhz": 20 if technology == "LTE" else 40,
+                    "bandwidth_mhz": default_bandwidth_mhz(
+                        selected_radio_characteristics.band,
+                        technology,
+                    ),
                     "scs_khz": 30 if technology == "NR" else None,
                     "margin_db": margin_db,
                 }
@@ -1249,6 +1268,47 @@ if st.session_state.rf_intake_step >= total_steps:
             coverage_result_df = st.session_state.coverage_result_df
             result_technology = st.session_state.mapl_result.get("Technology", "") if st.session_state.mapl_result else ""
             st.subheader(f"Step 2 - {result_technology} Coverage Results")
+            dots_per_iru = 5.5 if intake_data.get("use_case_type") == "Capacity Focused" else 7.0
+            equipment_summary = summarize_building_equipment(
+                coverage_result_df,
+                dots_per_iru=dots_per_iru,
+            )
+            if equipment_summary["Total_Required_DOTs_Radios"] > 0:
+                selected_model = str(st.session_state.mapl_result.get("Dot_Model", ""))
+                if selected_model.startswith("Micro Radio"):
+                    average_col, radio_col = st.columns(2)
+                    average_col.metric(
+                        "Average sq ft / Micro Radio",
+                        f"{equipment_summary['Average_sqft_per_DOT_Radio']:,.0f}",
+                    )
+                    radio_col.metric(
+                        "Total required Micro Radios",
+                        f"{equipment_summary['Total_Required_DOTs_Radios']:,}",
+                    )
+                    st.caption(
+                        "Micro Radio count is coverage based. IRU and BBU quantities are not shown because "
+                        "the reference table does not define a Micro Radio-to-baseband equipment ratio."
+                    )
+                else:
+                    average_col, dot_col, iru_col, bbu_col = st.columns(4)
+                    average_col.metric(
+                        "Average sq ft / DOT",
+                        f"{equipment_summary['Average_sqft_per_DOT_Radio']:,.0f}",
+                    )
+                    dot_col.metric(
+                        "Total required DOTs/Radios",
+                        f"{equipment_summary['Total_Required_DOTs_Radios']:,}",
+                    )
+                    iru_col.metric("Total IRUs", f"{equipment_summary['Total_IRUs']:,}")
+                    bbu_col.metric("Total BBUs", f"{equipment_summary['Total_BBUs']:,}")
+                    st.caption(
+                        "Average sq ft / DOT equals total modeled building area divided by total required radios. "
+                        f"IRUs are rounded up at {dots_per_iru:g} DOTs/Radios per IRU for the selected use case; "
+                        "BBUs are rounded up at 12 IRUs per BBU."
+                    )
+            else:
+                st.warning("No model-valid building equipment summary is available for these results.")
+
             valid_results = coverage_result_df[
                 coverage_result_df["Result_Valid_For_Planning"].fillna(False)
                 & coverage_result_df["Planning_Area_sqft"].notna()

@@ -13,6 +13,8 @@ from typing import Any, Mapping
 
 DATA_SOURCE = "Ericsson indoor radio RF reference table"
 RADIO_REFERENCE_PATH = Path(__file__).resolve().parent / "data" / "ericsson_radio_dot_rf.csv"
+DOT_4459_MAX_TX_POWER_DBM_PER_BRANCH = 23.0
+ENTERPRISE_COVERAGE_DOT_4455_N77_MAX_TX_POWER_DBM_PER_BRANCH = 24.0
 
 LTE_RB_TABLE = {
     1.4: 6,
@@ -86,6 +88,7 @@ class RadioMaplConfig:
     default_tx_power_dbm_per_branch: float = 0.0
     power_is_total_across_carriers: bool = False
     power_share_count: int = 1
+    operator_type: str = ""
     power_note: str = ""
     warnings: tuple[str, ...] = ()
     override_fields: tuple[str, ...] = ()
@@ -165,6 +168,17 @@ def normalize_band(value: Any) -> str:
     return normalized
 
 
+def default_bandwidth_mhz(band: Any, technology: Any) -> float:
+    """Return the application bandwidth default for a normalized RF band."""
+    normalized_band = normalize_band(band)
+    normalized_technology = normalize_technology(technology)
+    if normalized_band in {"B77D", "B77G"}:
+        return 80.0
+    if normalized_band in {"B25", "B66"}:
+        return 20.0
+    return 20.0 if normalized_technology == "LTE" else 40.0
+
+
 def _to_float(value: Any, field_name: str) -> float:
     try:
         number = float(value)
@@ -173,6 +187,58 @@ def _to_float(value: Any, field_name: str) -> float:
     if not math.isfinite(number):
         raise ValueError(f"{field_name} must be finite.")
     return number
+
+
+def apply_tx_power_policy(
+    shared_power_dbm_per_branch: Any,
+    operator_type: Any,
+    dot_model: Any,
+    band: Any = None,
+) -> tuple[float, str | None]:
+    """Apply deployment caps to per-branch power after operator sharing."""
+    shared_power = _to_float(
+        shared_power_dbm_per_branch,
+        "shared_tx_power_dbm_per_branch",
+    )
+    operator = str(operator_type or "").strip().casefold()
+    try:
+        normalized_model = normalize_radio_model(dot_model)
+    except ValueError:
+        normalized_model = str(dot_model or "").strip()
+
+    try:
+        normalized_band = normalize_band(band) if band is not None else ""
+    except ValueError:
+        normalized_band = str(band or "").strip().upper()
+
+    if (
+        operator in {"enterprise private 5g", "enterprise 5g coverage"}
+        and normalized_model == "DOT 4459"
+    ):
+        capped_power = min(
+            shared_power,
+            DOT_4459_MAX_TX_POWER_DBM_PER_BRANCH,
+        )
+        warning = (
+            "After operator power sharing, DOT 4459 transmit power is capped at "
+            "23 dBm per branch for Enterprise Private 5G and Enterprise 5G Coverage."
+        )
+        return capped_power, warning
+    if (
+        operator == "enterprise 5g coverage"
+        and normalized_model == "DOT 4455"
+        and normalized_band == "B77D"
+    ):
+        capped_power = min(
+            shared_power,
+            ENTERPRISE_COVERAGE_DOT_4455_N77_MAX_TX_POWER_DBM_PER_BRANCH,
+        )
+        warning = (
+            "After operator power sharing, DOT 4455 N77 transmit power is capped at "
+            "24 dBm per branch for Enterprise 5G Coverage."
+        )
+        return capped_power, warning
+    return shared_power, None
 
 
 def _to_positive_int(value: Any, field_name: str) -> int:
@@ -400,7 +466,7 @@ def build_radio_mapl_config(
         bandwidth_value = _mapping_value(calculated_data, "bandwidth_mhz", "Bandwidth_MHz")
         bandwidth_source = "existing project value"
     if bandwidth_value is None:
-        bandwidth_value = 20.0 if normalized_technology == "LTE" else 40.0
+        bandwidth_value = default_bandwidth_mhz(radio_reference.band, normalized_technology)
         bandwidth_source = "application default"
     bandwidth = _to_float(bandwidth_value, "bandwidth_mhz")
     value_sources["bandwidth_mhz"] = bandwidth_source
@@ -435,6 +501,10 @@ def build_radio_mapl_config(
         value_sources["configured_tx_power_dbm_per_branch"] = DATA_SOURCE
     if configured_power < -10 or configured_power > 40:
         raise ValueError("configured_tx_power_dbm_per_branch must be between -10 and 40 dBm.")
+
+    operator_type = _mapping_value(user_inputs, "Operator_type", "operator_type")
+    if operator_type is None:
+        operator_type = _mapping_value(calculated_data, "Operator_type", "operator_type")
 
     carrier_count_value = _mapping_value(user_inputs, "carrier_count", "Max_lim_channel_count")
     if carrier_count_value is None:
@@ -505,6 +575,7 @@ def build_radio_mapl_config(
         default_tx_power_dbm_per_branch=radio_reference.default_tx_power_dbm_per_branch,
         power_is_total_across_carriers=power_is_total,
         power_share_count=power_share_count,
+        operator_type=str(operator_type or "").strip(),
         power_note=radio_reference.power_note,
         warnings=tuple(dict.fromkeys(warnings)),
         override_fields=tuple(dict.fromkeys(override_fields)),
@@ -524,7 +595,13 @@ def calculate_mapl(config: RadioMaplConfig) -> dict[str, Any]:
     carrier_sharing_loss_db = 0.0
     if config.power_is_total_across_carriers:
         carrier_sharing_loss_db = 10.0 * math.log10(config.power_share_count)
-    effective_tx_power = config.configured_tx_power_dbm_per_branch - carrier_sharing_loss_db
+    shared_tx_power = config.configured_tx_power_dbm_per_branch - carrier_sharing_loss_db
+    effective_tx_power, power_policy_warning = apply_tx_power_policy(
+        shared_tx_power,
+        config.operator_type,
+        config.dot_model,
+        config.band,
+    )
     branch_eirp = effective_tx_power + config.antenna_gain_dbi
     total_subcarriers = 12 * rb_count
     power_per_re = branch_eirp - 10.0 * math.log10(total_subcarriers)
@@ -536,6 +613,12 @@ def calculate_mapl(config: RadioMaplConfig) -> dict[str, Any]:
             f"Total per-branch power is shared equally across {config.power_share_count} operators/carriers; "
             f"{carrier_sharing_loss_db:.2f} dB was subtracted."
         )
+    if power_policy_warning:
+        warnings.append(power_policy_warning)
+
+    power_source = config.value_sources.get("configured_tx_power_dbm_per_branch", "")
+    if effective_tx_power < shared_tx_power:
+        power_source = "Deployment power cap applied after operator sharing"
 
     return {
         "Dot_Model": config.dot_model,
@@ -567,7 +650,7 @@ def calculate_mapl(config: RadioMaplConfig) -> dict[str, Any]:
         "Final_MAPL_dB": final_mapl,
         "Max_Power_mW": 10.0 ** (effective_tx_power / 10.0),
         "Total_Power_dBm": effective_tx_power,
-        "Power_Source": config.value_sources.get("configured_tx_power_dbm_per_branch", ""),
+        "Power_Source": power_source,
         "Warnings": "; ".join(dict.fromkeys(warnings)),
         "Override_Fields": ", ".join(config.override_fields),
         "Data_Source": config.data_source,
