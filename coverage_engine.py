@@ -884,6 +884,6 @@ def summarize_building_equipment(coverage_result_df, dots_per_iru=7, irus_per_bb
         "Total_Required_DOTs_Radios": total_required_radios,
         "Total_IRUs": total_irus,
         "Total_BBUs": total_bbus,
-        "DOTs_per_IRU": int(dots_per_iru),
+        "DOTs_per_IRU": float(dots_per_iru),
         "IRUs_per_BBU": int(irus_per_bbu),
     }

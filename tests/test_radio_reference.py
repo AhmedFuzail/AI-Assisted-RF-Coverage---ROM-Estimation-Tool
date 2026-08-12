@@ -208,6 +208,23 @@ class RadioReferenceTests(unittest.TestCase):
             places=9,
         )
 
+    def test_operator_count_controls_power_split_independently_of_carrier_count(self):
+        config = radio_config(
+            "DOT 4459",
+            None,
+            "B48",
+            "NR",
+            carrier_count=1,
+            Operator_count=3,
+        )
+
+        result = calculate_mapl(config)
+
+        self.assertEqual(result["Carrier_Count"], 1)
+        self.assertEqual(result["Power_Share_Count"], 3)
+        self.assertTrue(result["Power_Is_Total_Across_Carriers"])
+        self.assertAlmostEqual(result["Carrier_Sharing_Loss_dB"], 10 * math.log10(3), places=9)
+
     def test_carrier_frequency_range_validation(self):
         with self.assertRaisesRegex(ValueError, "outside the supported B48 range"):
             radio_config("DOT 4459", None, "B48", "NR", carrier_frequency_mhz=3500)

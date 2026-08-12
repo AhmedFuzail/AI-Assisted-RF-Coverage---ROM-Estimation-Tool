@@ -85,6 +85,7 @@ class RadioMaplConfig:
     margin_db: float = 6.0
     default_tx_power_dbm_per_branch: float = 0.0
     power_is_total_across_carriers: bool = False
+    power_share_count: int = 1
     power_note: str = ""
     warnings: tuple[str, ...] = ()
     override_fields: tuple[str, ...] = ()
@@ -439,7 +440,21 @@ def build_radio_mapl_config(
     if carrier_count_value is None:
         carrier_count_value = _mapping_value(calculated_data, "carrier_count") or 1
     carrier_count = _to_positive_int(carrier_count_value, "carrier_count")
-    power_is_total = bool(_mapping_value(user_inputs, "power_is_total_across_carriers") or False)
+    power_share_count_value = _mapping_value(user_inputs, "power_share_count", "Operator_count")
+    operator_share_was_provided = power_share_count_value is not None
+    if power_share_count_value is None:
+        power_share_count_value = _mapping_value(calculated_data, "power_share_count") or carrier_count
+    power_share_count = _to_positive_int(power_share_count_value, "power_share_count")
+    power_sharing_value = _mapping_value(
+        user_inputs,
+        "power_is_total_across_carriers",
+        "power_sharing",
+    )
+    power_is_total = (
+        power_share_count > 1
+        if power_sharing_value is None and operator_share_was_provided
+        else bool(power_sharing_value or False)
+    )
 
     target_value = _mapping_value(user_inputs, "target_rsrp_dbm", "target_rsrp")
     if target_value is None:
@@ -489,6 +504,7 @@ def build_radio_mapl_config(
         margin_db=margin,
         default_tx_power_dbm_per_branch=radio_reference.default_tx_power_dbm_per_branch,
         power_is_total_across_carriers=power_is_total,
+        power_share_count=power_share_count,
         power_note=radio_reference.power_note,
         warnings=tuple(dict.fromkeys(warnings)),
         override_fields=tuple(dict.fromkeys(override_fields)),
@@ -507,7 +523,7 @@ def calculate_mapl(config: RadioMaplConfig) -> dict[str, Any]:
 
     carrier_sharing_loss_db = 0.0
     if config.power_is_total_across_carriers:
-        carrier_sharing_loss_db = 10.0 * math.log10(config.carrier_count)
+        carrier_sharing_loss_db = 10.0 * math.log10(config.power_share_count)
     effective_tx_power = config.configured_tx_power_dbm_per_branch - carrier_sharing_loss_db
     branch_eirp = effective_tx_power + config.antenna_gain_dbi
     total_subcarriers = 12 * rb_count
@@ -515,9 +531,9 @@ def calculate_mapl(config: RadioMaplConfig) -> dict[str, Any]:
     mapl_before_margin = power_per_re - config.target_rsrp_dbm
     final_mapl = mapl_before_margin - config.margin_db
     warnings = list(config.warnings)
-    if config.power_is_total_across_carriers and config.carrier_count > 1:
+    if config.power_is_total_across_carriers and config.power_share_count > 1:
         warnings.append(
-            f"Total per-branch power is shared equally across {config.carrier_count} carriers; "
+            f"Total per-branch power is shared equally across {config.power_share_count} operators/carriers; "
             f"{carrier_sharing_loss_db:.2f} dB was subtracted."
         )
 
@@ -538,6 +554,7 @@ def calculate_mapl(config: RadioMaplConfig) -> dict[str, Any]:
         "Antenna_Gain_dBi": config.antenna_gain_dbi,
         "Branch_EIRP_dBm": branch_eirp,
         "Carrier_Count": config.carrier_count,
+        "Power_Share_Count": config.power_share_count,
         "Power_Is_Total_Across_Carriers": config.power_is_total_across_carriers,
         "Carrier_Sharing_Loss_dB": carrier_sharing_loss_db,
         "RB_Count": rb_count,

@@ -118,6 +118,19 @@ class BuildingEquipmentSummaryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             summarize_building_equipment(results, dots_per_iru=0)
 
+    def test_capacity_focused_ratio_supports_5_point_5_dots_per_iru(self):
+        results = pd.DataFrame([{
+            "Area_Coverage_sqft": 120_000,
+            "Planning_Area_sqft": 10_000,
+            "Number_of_required_DOTs_Radios": 12,
+            "Result_Valid_For_Planning": True,
+            "Is_Limiting_Band": True,
+        }])
+
+        summary = summarize_building_equipment(results, dots_per_iru=5.5)
+
+        self.assertEqual(summary["Total_IRUs"], 3)
+        self.assertEqual(summary["DOTs_per_IRU"], 5.5)
 
 if __name__ == "__main__":
     unittest.main()

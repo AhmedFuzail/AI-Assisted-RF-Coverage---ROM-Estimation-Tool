@@ -106,8 +106,9 @@ Three helper functions control navigation:
 - `should_auto_fill_step()` decides whether a question is skipped.
 - `visible_step_indices()` determines the current dynamic question count.
 - `previous_visible_step_index()` makes Back navigation skip the same hidden questions.
+- `finish_saved_intake_step()` returns a targeted edit to the completed state or asks only for dependent answers that were invalidated.
 
-The progress bar is therefore based on the currently visible questions, not the static number of definitions.
+The progress bar is therefore based on the currently visible questions, not the static number of definitions. After completion, **Modify intake** lets the user select one previously answered field, preserve the other answers, and revisit only dependencies invalidated by that change.
 
 ### 4.3 Building and clutter model
 
@@ -133,7 +134,7 @@ mapl_result = calculate_mapl(radio_config)
 For each area row, the application calls:
 
 ```python
-calculate_building_coverage(area_record, mapl_result, margin_db=16.0)
+calculate_building_coverage(area_record, mapl_result, margin_db=18.0)
 ```
 
 The batch wrapper repeats the calculation for every area and every supplied MAPL result:
@@ -142,7 +143,7 @@ The batch wrapper repeats the calculation for every area and every supplied MAPL
 calculate_coverage_for_all_buildings(
     building_df,
     mapl_results,
-    margin_db=16.0,
+    margin_db=18.0,
     overrides=coverage_overrides,
 )
 ```
@@ -159,7 +160,7 @@ The table below separates active calculation inputs from values collected for wo
 | Number of Floors | `number_of_floors` | Stored in intake summary | **No current coverage effect** |
 | General Building Type | `Building_type` | Filters workbook categories; fallback ITU mapping | Yes, indirectly |
 | Building Category | `Building_category` | Filters workbook subtype rows | Yes, indirectly |
-| Use Case Type | `use_case_type` | Coverage Focused or Capacity Focused | **Not yet used in equations** |
+| Use Case Type | `use_case_type` | Selects 7 DOTs/IRU for Coverage Focused or 5.5 DOTs/IRU for Capacity Focused | Equipment conversion only |
 | Equipment Type | `sol_type` | Filters Radio Dot versus Micro selections | Selection logic only |
 | Operator Type | `Operator_type` | Determines private NR or public LTE/NR workflow | Yes |
 | Coverage Type | `Coverage_type` | Maps 4G to LTE and 5G to NR | Yes |
@@ -168,9 +169,9 @@ The table below separates active calculation inputs from values collected for wo
 | Radio Dot Model | `dot_type` | Normalized to `dot_model` | Yes, lookup key |
 | Hardware Variant | `dot_variant_kry` | Exact KRY or unique inference | Yes, lookup key |
 | Highest Frequency Band | `Limit_freq_type` | Normalized to RF band | Yes, lookup key and propagation frequency |
-| Operators on Highest Band | `Operator_count` | Auto-set to 1 for private 5G | **Not currently used in MAPL** |
-| Max Channels on Highest Band | `Max_lim_channel_count` | Becomes `carrier_count` | Only if advanced carrier power sharing is enabled |
-| Power Sharing | `power_sharing` | Operator-level intake flag | **Not wired to the current MAPL power-sharing formula** |
+| Operators on Highest Band | `Operator_count` | Auto-set to 1 for private 5G; otherwise controls equal per-branch power sharing | Yes, MAPL when greater than 1 |
+| Max Channels on Highest Band | `Max_lim_channel_count` | Hidden and fixed to 1 | No variable user input in current ROM |
+| Power Sharing | `power_sharing` | Hidden; derived as `Operator_count > 1` | Yes, controls operator power split |
 
 ### 5.1 Conditional question rules
 
@@ -181,8 +182,10 @@ The table below separates active calculation inputs from values collected for wo
 | Enterprise 5G Coverage with 4G | Technology is LTE; deployment bands are B25 and B66 |
 | Enterprise 5G Coverage with 5G | Technology is NR; deployment bands are B77D and B77G |
 | Enterprise Private 5G | Deployment band is B48 |
-| `sol_type == Micro-BBU` | KRY question is skipped |
+| One compatible hardware variant | Hardware-variant question is auto-filled and skipped; multiple variants remain selectable with supported bands shown |
 | Public coverage workflow | Target RSRP question is skipped; calculation currently falls back to -95 dBm |
+| Private 5G + DOT-IRU-BBU | DOT 4459 is the only Radio Model option |
+| Enterprise 5G Coverage + DOT-IRU-BBU | DOT 2274 and DOT 4455 are the only Radio Model options |
 
 ### 5.2 Dependent radio selectors
 
@@ -389,7 +392,9 @@ The tool does not invent a SAS reduction. The engineer must override power when 
 | `tx_branch_count` | Radio reference row | count |
 | `configured_tx_power_dbm_per_branch` | Advanced override or reference default | dBm/branch |
 | `antenna_gain_dbi` | Radio reference row | dBi |
-| `carrier_count` | `Max_lim_channel_count` | count |
+| `carrier_count` | Hidden `Max_lim_channel_count`, fixed to 1 | count |
+| `power_share_count` | `Operator_count` | count |
+| `power_is_total_across_carriers` | Derived `power_sharing`, true when operator count is greater than 1 | boolean |
 | `target_rsrp_dbm` | Target RSRP or current -95 dBm fallback | dBm |
 | `margin_db` | Hidden current UI policy value | **18 dB** |
 
@@ -448,23 +453,21 @@ NR FR1 at 30 kHz SCS:
 
 The code also contains NR FR1 tables for 15 and 60 kHz SCS, although the current UI supplies 30 kHz.
 
-### 9.3 Carrier power-sharing rule
+### 9.3 Operator power-sharing rule
 
-The normal assumption is that configured power is already per carrier and per branch. No sharing loss is applied.
-
-Only when the advanced checkbox confirms that the entered branch power is total power shared equally across carriers:
+`Max_lim_channel_count` is hidden and fixed to one in the current ROM. The guided intake derives `power_sharing` directly from `Operator_count`. When one operator uses the highest band, no sharing loss is applied. When multiple operators use it, total per-branch power is split equally:
 
 ```text
-Carrier_Sharing_Loss_dB = 10 * log10(Carrier_Count)
+Operator_Power_Sharing_Loss_dB = 10 * log10(Operator_Count)
 ```
 
 ```text
 Effective_Tx_Power_dBm_per_Branch
     = Configured_Tx_Power_dBm_per_Branch
-    - Carrier_Sharing_Loss_dB
+    - Operator_Power_Sharing_Loss_dB
 ```
 
-The guided intake variable `power_sharing` is not the same as the advanced `power_is_total_across_carriers` calculation flag.
+The output retains the internal key `Carrier_Sharing_Loss_dB` for backward compatibility, and also reports `Power_Share_Count`. Carrier count remains one and is not substituted for operator count.
 
 ### 9.4 Branch EIRP
 
@@ -1011,9 +1014,9 @@ only after both engines have defined units and scope consistently.
 1. **Fixed UI margin:** The current live Streamlit workflow uses a hidden 18 dB margin.
 2. **Fixed bandwidth/SCS:** LTE uses 20 MHz; NR uses 40 MHz at 30 kHz SCS.
 3. **Public target RSRP:** Enterprise 5G Coverage currently falls back to -95 dBm because its target question is skipped.
-4. **Micro radios:** Micro 4402/4408 can appear in intake, but no corresponding RF reference rows exist; the radio lookup cannot calculate them reliably.
+4. **Micro equipment chain:** Micro 4402/4408 RF characteristics and radio counts are supported, but IRU/BBU conversion is not shown because no Micro Radio-to-baseband ratio is defined.
 5. **Floors:** Number of floors does not affect coverage or radio count.
-6. **Capacity:** Use Case Type does not yet invoke a capacity model.
+6. **Capacity:** Capacity Focused changes the equipment conversion to 5.5 DOTs per IRU, but does not yet invoke a traffic-capacity radio-sizing model.
 7. **Mobility:** Intake and workbook mobility fields are informational.
 8. **Materials:** Material and workbook total losses are diagnostic, not automatic incremental loss.
 9. **Ceiling height:** High ceiling currently produces a warning but no dB correction.
