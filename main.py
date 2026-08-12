@@ -13,6 +13,7 @@ from radio_reference import (
     calculate_mapl,
     get_radio_dot_characteristics,
     get_radio_dot_variants,
+    get_radio_dot_models,
     get_supported_bands,
     reference_table_display_rows,
 )
@@ -346,21 +347,54 @@ intake_steps = [
     {"key": "Coverage_type", "label": "Coverage Type", "prompt": "Which coverage technology should be calculated?", "type": "select", "options": ["4G", "5G"]},
     {"key": "target_rsrp", "label": "Target RSRP", "prompt": "What target RSRP should the private 5G design use?", "type": "range_slider", "default": -95, "min": -120, "max": -80, "step": 1},
     {"key": "Mobility_type", "label": "Mobility Requirement", "prompt": "What mobility requirement should the design support?", "type": "select", "options": ["Low Mobility", "High Mobility"]},
-    {"key": "dot_type", "label": "Radio Dot Model", "prompt": "Which Radio Dot model should be assumed?", "type": "select", "options": ["DOT 4459", "Micro_4408", "Micro_4402", "DOT 4455", "DOT 2274"]},
-    {"key": "dot_variant_kry", "label": "Hardware Variant", "prompt": "Which KRY hardware variant applies?", "type": "select", "options": []},
+    {"key": "dot_type", "label": "Radio Model", "prompt": "Which indoor radio model should be assumed?", "type": "select", "options": get_radio_dot_models()},
+    {"key": "dot_variant_kry", "label": "Hardware Variant", "prompt": "Which hardware variant applies?", "type": "select", "options": []},
     {"key": "Limit_freq_type", "label": "Highest Frequency Band", "prompt": "What is the highest limiting frequency band?", "type": "select", "options": ["B25", "B66", "B41", "B41K", "B48", "B77G", "B77D"]},
     {"key": "Operator_count", "label": "Operators on Highest Band", "prompt": "How many operators use the highest frequency band?", "type": "slider", "options": [1, 2, 3]},
     {"key": "Max_lim_channel_count", "label": "Max Channels on Highest Band", "prompt": "What is the max number of highest-band channels for one operator?", "type": "slider", "options": [1, 2, 3]},
     {"key": "power_sharing", "label": "Power Sharing", "prompt": "Is power shared between multiple operators?", "type": "checkbox", "default": False},
 ]
 
+def compatible_radio_variant_options(intake_data):
+    radio_model = str(intake_data.get("dot_type", "")).strip()
+    if not radio_model:
+        return []
+    technology = _intake_technology(intake_data)
+    allowed_bands = _deployment_allowed_bands(intake_data)
+    try:
+        variants = get_radio_dot_variants(radio_model, technology=technology)
+        return [
+            variant
+            for variant in variants
+            if set(get_supported_bands(radio_model, variant, technology)).intersection(allowed_bands)
+        ]
+    except ValueError:
+        return []
+
+
+def format_radio_variant_option(variant, intake_data):
+    radio_model = intake_data.get("dot_type", "")
+    technology = _intake_technology(intake_data)
+    allowed_bands = _deployment_allowed_bands(intake_data)
+    try:
+        supported_bands = sorted(
+            set(get_supported_bands(radio_model, variant, technology)).intersection(allowed_bands)
+        )
+    except ValueError:
+        supported_bands = []
+    band_text = ", ".join(supported_bands) if supported_bands else "band unavailable"
+    return f"{variant} ({band_text})"
+
+
 def should_auto_fill_step(step, intake_data):
     operator_type = intake_data.get("Operator_type")
+    if step["key"] == "dot_variant_kry":
+        radio_model = str(intake_data.get("dot_type", "")).strip()
+        return bool(radio_model) and len(compatible_radio_variant_options(intake_data)) == 1
     return (
         (step["key"] in ("Operator_count", "Max_lim_channel_count", "power_sharing") and operator_type == "Enterprise Private 5G")
         or (step["key"] == "target_rsrp" and operator_type == "Enterprise 5G Coverage")
         or (step["key"] == "Coverage_type" and operator_type != "Enterprise 5G Coverage")
-        or (step["key"] == "dot_variant_kry" and intake_data.get("sol_type") == "Micro-BBU")
     )
 
 
@@ -407,12 +441,7 @@ def _intake_technology(intake_data):
 def _deployment_allowed_bands(intake_data):
     if intake_data.get("Operator_type") == "Enterprise Private 5G":
         return {"B48"}
-    technology = _intake_technology(intake_data)
-    if technology == "LTE":
-        return {"B25", "B66"}
-    if technology == "NR":
-        return {"B77D", "B77G"}
-    return {"B25", "B66", "B41", "B41K", "B48", "B77D", "B77G"}
+    return {"B25", "B66", "B41", "B41K", "B77D", "B77G"}
 
 
 def get_filtered_step_options(step, intake_data):
@@ -430,12 +459,13 @@ def get_filtered_step_options(step, intake_data):
     if step["key"] == "dot_type":
         equipment_type = intake_data.get("sol_type")
         if equipment_type == "Micro-BBU":
-            return [option for option in options if option.startswith("Micro")]
-        dot_options = [option for option in options if option.startswith("DOT")]
+            radio_options = [option for option in options if option.startswith("Micro Radio")]
+        else:
+            radio_options = [option for option in options if option.startswith("DOT")]
         technology = _intake_technology(intake_data)
         allowed_bands = _deployment_allowed_bands(intake_data)
         compatible_options = []
-        for option in dot_options:
+        for option in radio_options:
             try:
                 supported = set(get_supported_bands(option, technology=technology))
             except ValueError:
@@ -445,22 +475,12 @@ def get_filtered_step_options(step, intake_data):
         return compatible_options
 
     if step["key"] == "dot_variant_kry":
-        dot_model = intake_data.get("dot_type", "")
-        if not str(dot_model).strip() or str(dot_model).startswith("Micro"):
-            return []
-        technology = _intake_technology(intake_data)
-        allowed_bands = _deployment_allowed_bands(intake_data)
-        variants = get_radio_dot_variants(dot_model, technology=technology)
-        return [
-            variant
-            for variant in variants
-            if set(get_supported_bands(dot_model, variant, technology)).intersection(allowed_bands)
-        ]
+        return compatible_radio_variant_options(intake_data)
 
     if step["key"] == "Limit_freq_type":
         dot_model = intake_data.get("dot_type", "")
         allowed = _deployment_allowed_bands(intake_data)
-        if not str(dot_model).strip() or str(dot_model).startswith("Micro"):
+        if not str(dot_model).strip():
             return [band for band in options if band in allowed]
         variant = intake_data.get("dot_variant_kry")
         technology = _intake_technology(intake_data)
@@ -505,7 +525,11 @@ while st.session_state.rf_intake_step < total_steps:
     if auto_fill_step["key"] == "power_sharing":
         st.session_state.rf_intake_data[auto_fill_step["key"]] = False
     elif auto_fill_step["key"] == "dot_variant_kry":
-        st.session_state.rf_intake_data.pop(auto_fill_step["key"], None)
+        compatible_variants = compatible_radio_variant_options(st.session_state.rf_intake_data)
+        if len(compatible_variants) == 1:
+            st.session_state.rf_intake_data[auto_fill_step["key"]] = compatible_variants[0]
+        else:
+            st.session_state.rf_intake_data.pop(auto_fill_step["key"], None)
     elif auto_fill_step["key"] == "target_rsrp":
         st.session_state.rf_intake_data.pop(auto_fill_step["key"], None)
     elif auto_fill_step["key"] == "Coverage_type":
@@ -564,7 +588,18 @@ if st.session_state.rf_intake_step < total_steps:
         elif current_step["type"] == "select":
             options = current_step["options"]
             selected_index = options.index(existing_value) if existing_value in options else 0
-            step_value = st.selectbox(current_step["label"], options, index=selected_index)
+            if current_step["key"] == "dot_variant_kry" and len(options) > 1:
+                step_value = st.selectbox(
+                    current_step["label"],
+                    options,
+                    index=selected_index,
+                    format_func=lambda variant: format_radio_variant_option(
+                        variant,
+                        st.session_state.rf_intake_data,
+                    ),
+                )
+            else:
+                step_value = st.selectbox(current_step["label"], options, index=selected_index)
         elif current_step["type"] == "slider":
             options = current_step["options"]
             selected_index = options.index(existing_value) if existing_value in options else 0
@@ -975,7 +1010,7 @@ if st.session_state.rf_intake_step >= total_steps:
                         step=0.5,
                         key=f"tx_power_override::{radio_key}",
                     )
-                    st.info("Using user-configured Tx power instead of the Radio Dot default.")
+                    st.info("Using user-configured Tx power instead of the radio reference default.")
                 power_is_total_across_carriers = st.checkbox(
                     "Entered power is total branch power shared equally across carriers",
                     value=False,
@@ -1003,14 +1038,14 @@ if st.session_state.rf_intake_step >= total_steps:
                     f"{selected_radio_characteristics.frequency_max_mhz:g} MHz"
                 ),
             }])
-            st.subheader("Selected Radio Dot RF Characteristics")
+            st.subheader("Selected Radio RF Characteristics")
             st.dataframe(selected_radio_df, width="content", hide_index=True)
             for warning in selected_radio_characteristics.warnings:
                 st.warning(warning)
         elif selected_radio_error:
             st.warning(selected_radio_error)
 
-        with st.expander("Ericsson Radio Dot RF Reference"):
+        with st.expander("Ericsson Indoor Radio RF Reference"):
             st.dataframe(pd.DataFrame(reference_table_display_rows()), width="stretch", hide_index=True)
             st.caption("Special operating notes appear as selection warnings and are not included in the concise table.")
 
@@ -1068,7 +1103,7 @@ if st.session_state.rf_intake_step >= total_steps:
                     intake_data.get("Coverage_type", "5G"),
                 )
                 if selected_radio_characteristics is None:
-                    raise ValueError(selected_radio_error or "Select a supported Radio Dot configuration.")
+                    raise ValueError(selected_radio_error or "Select a supported radio configuration.")
                 radio_inputs = dict(intake_data)
                 radio_inputs.update({
                     "technology": technology,

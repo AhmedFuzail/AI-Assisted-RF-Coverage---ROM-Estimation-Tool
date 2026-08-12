@@ -13,9 +13,12 @@ from radio_reference import (
     build_radio_mapl_config,
     calculate_mapl,
     get_radio_dot_characteristics,
+    get_radio_dot_models,
     load_radio_dot_reference,
     normalize_band,
     normalize_dot_model,
+    normalize_radio_model,
+    normalize_variant_kry,
 )
 
 
@@ -77,19 +80,49 @@ class RadioReferenceTests(unittest.TestCase):
         self.assertEqual(result.duplex_mode, "TDD")
         self.assertIn("SAS-authorized", " ".join(result.warnings))
 
+    def test_micro_4402_b25_unique_inference(self):
+        result = get_radio_dot_characteristics("Micro_4402", None, "B25", "LTE")
+        self.assertEqual(result.dot_model, "Micro Radio 4402")
+        self.assertEqual(result.dot_variant_kry, "KRC 161 737/1")
+        self.assertEqual(result.default_tx_power_dbm_per_branch, 37)
+        self.assertEqual(result.antenna_gain_dbi, 9.2)
+        self.assertEqual(result.tx_branch_count, 4)
+        self.assertEqual(result.duplex_mode, "FDD")
+
+    def test_micro_4402_b66_resolves_krc_variant(self):
+        result = get_radio_dot_characteristics("Micro Radio 4402", None, "AWS", "NR")
+        self.assertEqual(result.dot_variant_kry, "KRC 161 738/1")
+        self.assertEqual(result.default_tx_power_dbm_per_branch, 37)
+        self.assertEqual(result.antenna_gain_dbi, 8.5)
+
+    def test_micro_4408_b48_uses_rf_table_and_sas_warning(self):
+        result = get_radio_dot_characteristics("Micro4408", None, "CBRS", "5G")
+        self.assertEqual(result.dot_model, "Micro Radio 4408")
+        self.assertEqual(result.dot_variant_kry, "KRC 161 746/1")
+        self.assertEqual(result.default_tx_power_dbm_per_branch, 37)
+        self.assertEqual(result.antenna_gain_dbi, 12.06)
+        self.assertEqual(result.tx_branch_count, 4)
+        self.assertEqual(result.duplex_mode, "TDD")
+        self.assertIn("SAS-authorized", " ".join(result.warnings))
+
+    def test_reference_model_list_includes_micro_radios(self):
+        self.assertIn("Micro Radio 4402", get_radio_dot_models())
+        self.assertIn("Micro Radio 4408", get_radio_dot_models())
+
     def test_dot_4455_b77d_requires_variant(self):
         with self.assertRaisesRegex(ValueError, "more than one hardware variant"):
             get_radio_dot_characteristics("DOT4455", None, "N77/C-Band", "NR")
 
     def test_dot_4455_b77d_kry_523(self):
         result = get_radio_dot_characteristics("DOT 4455", "KRY 901 523/1", "B77D", "NR")
-        self.assertEqual(result.default_tx_power_dbm_per_branch, 24)
+        self.assertEqual(result.default_tx_power_dbm_per_branch, 26)
         self.assertEqual(result.antenna_gain_dbi, 4.3)
         self.assertEqual(result.tx_branch_count, 4)
+        self.assertIn("power mismatch", " ".join(result.warnings))
 
     def test_dot_4455_b77d_kry_551(self):
         result = get_radio_dot_characteristics("DOT 4455", "KRY 901 551/1", "B77D", "NR")
-        self.assertEqual(result.default_tx_power_dbm_per_branch, 24)
+        self.assertEqual(result.default_tx_power_dbm_per_branch, 26)
         self.assertEqual(result.antenna_gain_dbi, 5.39)
         self.assertEqual(result.tx_branch_count, 4)
 
@@ -100,6 +133,9 @@ class RadioReferenceTests(unittest.TestCase):
     def test_normalization_aliases(self):
         self.assertEqual(normalize_dot_model("RD4455"), "DOT 4455")
         self.assertEqual(normalize_dot_model("Radio Dot 4455"), "DOT 4455")
+        self.assertEqual(normalize_radio_model("Micro_4408"), "Micro Radio 4408")
+        self.assertEqual(normalize_radio_model("Micro Radio 4402"), "Micro Radio 4402")
+        self.assertEqual(normalize_variant_kry("KRC161 746/1"), "KRC 161 746/1")
         self.assertEqual(normalize_band("Band 25"), "B25")
         self.assertEqual(normalize_band("B4/B66"), "B66")
         self.assertEqual(normalize_band("N77/C-Band"), "B77D")
@@ -192,16 +228,19 @@ class RadioReferenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "duplicate.csv"
             path.write_text(duplicate, encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "Duplicate or conflicting Radio Dot RF reference row"):
+            with self.assertRaisesRegex(ValueError, "Duplicate or conflicting radio RF reference row"):
                 load_radio_dot_reference(path)
 
     def test_numerical_regressions(self):
         cases = [
             ("DOT 2274", None, "B25", "LTE", 88.50818753952376),
             ("DOT 4455", "KRY 901 523/1", "B66", "LTE", 91.50818753952376),
-            ("DOT 4455", "KRY 901 523/1", "B77D", "NR", 92.25512888687605),
+            ("DOT 4455", "KRY 901 523/1", "B77D", "NR", 94.25512888687605),
             ("DOT 4459", None, "B48", "NR", 95.25512888687605),
             ("DOT 4459", None, "B77D", "NR", 95.35512888687605),
+            ("Micro Radio 4402", None, "B25", "LTE", 110.40818753952375),
+            ("Micro Radio 4402", None, "B66", "NR", 109.45512888687605),
+            ("Micro Radio 4408", None, "B48", "NR", 113.01512888687606),
         ]
         for model, variant, band, technology, expected_mapl in cases:
             with self.subTest(model=model, variant=variant, band=band, technology=technology):

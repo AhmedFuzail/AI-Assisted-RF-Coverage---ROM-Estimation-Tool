@@ -1,4 +1,4 @@
-"""Ericsson Radio Dot RF lookup, validation, and MAPL configuration."""
+"""Ericsson indoor radio RF lookup, validation, and MAPL configuration."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
-DATA_SOURCE = "Ericsson Radio Dot RF reference table"
+DATA_SOURCE = "Ericsson indoor radio RF reference table"
 RADIO_REFERENCE_PATH = Path(__file__).resolve().parent / "data" / "ericsson_radio_dot_rf.csv"
 
 LTE_RB_TABLE = {
@@ -92,21 +92,29 @@ class RadioMaplConfig:
     data_source: str = DATA_SOURCE
 
 
-def normalize_dot_model(value: Any) -> str:
+def normalize_radio_model(value: Any) -> str:
     text = str(value or "").strip().upper()
     match = re.search(r"(\d{4})", text)
     if not match:
-        raise ValueError(f"Unsupported Radio Dot model: {value or 'blank'}.")
+        raise ValueError(f"Unsupported radio model: {value or 'blank'}.")
+    if "MICRO" in text:
+        return f"Micro Radio {match.group(1)}"
     return f"DOT {match.group(1)}"
+
+
+def normalize_dot_model(value: Any) -> str:
+    """Backward-compatible alias for radio model normalization."""
+    return normalize_radio_model(value)
 
 
 def normalize_variant_kry(value: Any) -> str:
     text = " ".join(str(value or "").strip().upper().split())
     if not text:
         return ""
-    if not text.startswith("KRY "):
-        text = f"KRY {text.removeprefix('KRY').strip()}"
-    return text
+    prefixed = re.match(r"^(KRY|KRC)\s*(.*)$", text)
+    if prefixed:
+        return f"{prefixed.group(1)} {prefixed.group(2).strip()}"
+    return f"KRY {text}"
 
 
 def normalize_technology(value: Any) -> str:
@@ -174,10 +182,10 @@ def _to_positive_int(value: Any, field_name: str) -> int:
 
 
 @lru_cache(maxsize=8)
-def _load_reference(reference_path: str) -> tuple[RadioDotCharacteristics, ...]:
+def _load_reference(reference_path: str, modified_ns: int) -> tuple[RadioDotCharacteristics, ...]:
     path = Path(reference_path)
     if not path.exists():
-        raise FileNotFoundError(f"Radio Dot RF reference table not found: {path}")
+        raise FileNotFoundError(f"Radio RF reference table not found: {path}")
 
     with path.open("r", encoding="utf-8-sig", newline="") as source:
         reader = csv.DictReader(source)
@@ -189,7 +197,7 @@ def _load_reference(reference_path: str) -> tuple[RadioDotCharacteristics, ...]:
     results = []
     lookup_keys = set()
     for row_number, row in enumerate(rows, start=2):
-        dot_model = normalize_dot_model(row["dot_model"])
+        dot_model = normalize_radio_model(row["dot_model"])
         variant = normalize_variant_kry(row["dot_variant_kry"])
         band = normalize_band(row["band"])
         technologies = tuple(dict.fromkeys(
@@ -204,7 +212,7 @@ def _load_reference(reference_path: str) -> tuple[RadioDotCharacteristics, ...]:
         conflicting_keys = [key for key in row_keys if key in lookup_keys]
         if conflicting_keys:
             raise ValueError(
-                f"Duplicate or conflicting Radio Dot RF reference row at CSV row {row_number}: "
+                f"Duplicate or conflicting radio RF reference row at CSV row {row_number}: "
                 f"{conflicting_keys[0]}."
             )
         lookup_keys.update(row_keys)
@@ -219,6 +227,15 @@ def _load_reference(reference_path: str) -> tuple[RadioDotCharacteristics, ...]:
 
         warnings = []
         power_note = row["power_note"].strip()
+        if power_note and power_note.lower() != "standard default":
+            warnings.append(power_note)
+        documented_power = re.search(r"use\s+(-?\d+(?:\.\d+)?)\s*dBm", power_note, re.IGNORECASE)
+        numeric_power = _to_float(row["default_tx_power_dbm_per_branch"], "default_tx_power_dbm_per_branch")
+        if documented_power and not math.isclose(float(documented_power.group(1)), numeric_power, abs_tol=0.05):
+            warnings.append(
+                f"RF reference power mismatch: numeric default is {numeric_power:g} dBm per branch, "
+                f"while power_note states {documented_power.group(1)} dBm. The numeric field was used."
+            )
         if band == "B48":
             warnings.append("Actual CBRS power may be lower because of SAS-authorized EIRP or PSD limits.")
         results.append(RadioDotCharacteristics(
@@ -231,7 +248,7 @@ def _load_reference(reference_path: str) -> tuple[RadioDotCharacteristics, ...]:
             supported_technologies=technologies,
             duplex_mode=duplex_mode,
             tx_branch_count=_to_positive_int(row["tx_branch_count"], "tx_branch_count"),
-            default_tx_power_dbm_per_branch=_to_float(row["default_tx_power_dbm_per_branch"], "default_tx_power_dbm_per_branch"),
+            default_tx_power_dbm_per_branch=numeric_power,
             antenna_gain_dbi=_to_float(row["antenna_gain_dbi"], "antenna_gain_dbi"),
             power_note=power_note,
             warnings=tuple(warnings),
@@ -240,7 +257,10 @@ def _load_reference(reference_path: str) -> tuple[RadioDotCharacteristics, ...]:
 
 
 def load_radio_dot_reference(reference_path: str | Path = RADIO_REFERENCE_PATH) -> tuple[RadioDotCharacteristics, ...]:
-    return _load_reference(str(Path(reference_path).resolve()))
+    path = Path(reference_path).resolve()
+    if not path.exists():
+        raise FileNotFoundError(f"Radio RF reference table not found: {path}")
+    return _load_reference(str(path), path.stat().st_mtime_ns)
 
 
 def get_radio_dot_characteristics(
@@ -250,7 +270,7 @@ def get_radio_dot_characteristics(
     technology: str,
     reference_path: str | Path = RADIO_REFERENCE_PATH,
 ) -> RadioDotCharacteristics:
-    model = normalize_dot_model(dot_model)
+    model = normalize_radio_model(dot_model)
     variant = normalize_variant_kry(dot_variant_kry)
     normalized_band = normalize_band(band)
     normalized_technology = normalize_technology(technology)
@@ -258,7 +278,7 @@ def get_radio_dot_characteristics(
 
     model_rows = [row for row in reference if row.dot_model == model]
     if not model_rows:
-        raise ValueError(f"Unsupported Radio Dot model: {model}.")
+        raise ValueError(f"Unsupported radio model: {model}.")
     band_rows = [row for row in model_rows if row.band == normalized_band]
     if not band_rows:
         supported = ", ".join(sorted({row.band for row in model_rows}))
@@ -284,7 +304,7 @@ def get_radio_dot_characteristics(
             f"{' or '.join(variants)} because the antenna gains differ."
         )
     if len(technology_rows) != 1:
-        raise ValueError(f"Conflicting Radio Dot RF reference rows found for {model}, {normalized_band}, and {normalized_technology}.")
+        raise ValueError(f"Conflicting radio RF reference rows found for {model}, {normalized_band}, and {normalized_technology}.")
     return technology_rows[0]
 
 
@@ -297,7 +317,7 @@ def get_radio_dot_variants(
     technology: str | None = None,
     reference_path: str | Path = RADIO_REFERENCE_PATH,
 ) -> list[str]:
-    model = normalize_dot_model(dot_model)
+    model = normalize_radio_model(dot_model)
     rows = [row for row in load_radio_dot_reference(reference_path) if row.dot_model == model]
     if technology:
         normalized_technology = normalize_technology(technology)
@@ -311,7 +331,7 @@ def get_supported_bands(
     technology: str | None = None,
     reference_path: str | Path = RADIO_REFERENCE_PATH,
 ) -> list[str]:
-    model = normalize_dot_model(dot_model)
+    model = normalize_radio_model(dot_model)
     variant = normalize_variant_kry(dot_variant_kry)
     rows = [row for row in load_radio_dot_reference(reference_path) if row.dot_model == model]
     if variant:
@@ -541,8 +561,8 @@ def reference_table_display_rows(reference_path: str | Path = RADIO_REFERENCE_PA
     rows = []
     for item in load_radio_dot_reference(reference_path):
         rows.append({
-            "Radio Dot": item.dot_model,
-            "KRY variant": item.dot_variant_kry,
+            "Radio": item.dot_model,
+            "Hardware variant": item.dot_variant_kry,
             "Band": item.band,
             "Frequency": f"{item.frequency_min_mhz:g}-{item.frequency_max_mhz:g} MHz",
             "Technology / duplex": f"{'/'.join(item.supported_technologies)} / {item.duplex_mode}",

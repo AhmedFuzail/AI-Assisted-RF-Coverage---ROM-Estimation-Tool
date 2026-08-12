@@ -16,6 +16,7 @@ from radio_reference import (
     calculate_mapl,
     get_radio_dot_characteristics,
     get_radio_dot_variants,
+    get_radio_dot_models,
     get_supported_bands,
 )
 st.set_page_config(
@@ -339,8 +340,8 @@ intake_steps = [
     {"key": "Coverage_type", "label": "Coverage Type", "prompt": "Which coverage technology should be calculated?", "type": "select", "options": ["4G", "5G"]},
     {"key": "target_rsrp", "label": "Target RSRP (Recommended at -95 for standard EP5G designs)", "prompt": "What target RSRP should the private 5G design use?", "type": "range_slider", "default": -95, "min": -120, "max": -80, "step": 1},
     {"key": "Mobility_type", "label": "Mobility Requirement", "prompt": "What mobility requirement should the design support?", "type": "select", "options": ["Low Mobility", "High Mobility"]},
-    {"key": "dot_type", "label": "Radio Dot Model", "prompt": "Which Radio Dot model should be assumed?", "type": "select", "options": ["DOT 4459", "Micro_4408", "Micro_4402", "DOT 4455", "DOT 2274"]},
-    {"key": "dot_variant_kry", "label": "Hardware Variant", "prompt": "Which KRY hardware variant applies?", "type": "select", "options": []},
+    {"key": "dot_type", "label": "Radio Model", "prompt": "Which indoor radio model should be assumed?", "type": "select", "options": get_radio_dot_models()},
+    {"key": "dot_variant_kry", "label": "Hardware Variant", "prompt": "Which hardware variant applies?", "type": "select", "options": []},
     {"key": "Limit_freq_type", "label": "Highest Frequency Band", "prompt": "What is the highest limiting frequency band?", "type": "select", "options": ["B25", "B66", "B41", "B41K", "B48", "B77G", "B77D"]},
     {"key": "Operator_count", "label": "Operators on Highest Band", "prompt": "How many operators use the highest frequency band?", "type": "slider", "options": [1, 2, 3]},
     {"key": "Max_lim_channel_count", "label": "Max Channels on Highest Band", "prompt": "What is the max number of highest-band channels for one operator?", "type": "slider", "options": [1, 2, 3]},
@@ -349,7 +350,7 @@ intake_steps = [
 
 def compatible_dot_variant_options(intake_data):
     dot_model = str(intake_data.get("dot_type", "")).strip()
-    if not dot_model or dot_model.startswith("Micro"):
+    if not dot_model:
         return []
     technology = _intake_technology(intake_data)
     allowed_bands = _deployment_allowed_bands(intake_data)
@@ -381,8 +382,6 @@ def format_dot_variant_option(variant, intake_data):
 def should_auto_fill_step(step, intake_data):
     operator_type = intake_data.get("Operator_type")
     if step["key"] == "dot_variant_kry":
-        if intake_data.get("sol_type") == "Micro-BBU":
-            return True
         dot_model = str(intake_data.get("dot_type", "")).strip()
         return bool(dot_model) and len(compatible_dot_variant_options(intake_data)) == 1
     return (
@@ -435,12 +434,7 @@ def _intake_technology(intake_data):
 def _deployment_allowed_bands(intake_data):
     if intake_data.get("Operator_type") == "Enterprise Private 5G":
         return {"B48"}
-    technology = _intake_technology(intake_data)
-    if technology == "LTE":
-        return {"B25", "B66"}
-    if technology == "NR":
-        return {"B77D", "B77G"}
-    return {"B25", "B66", "B41", "B41K", "B48", "B77D", "B77G"}
+    return {"B25", "B66", "B41", "B41K", "B77D", "B77G"}
 
 
 def get_filtered_step_options(step, intake_data):
@@ -458,12 +452,13 @@ def get_filtered_step_options(step, intake_data):
     if step["key"] == "dot_type":
         equipment_type = intake_data.get("sol_type")
         if equipment_type == "Micro-BBU":
-            return [option for option in options if option.startswith("Micro")]
-        dot_options = [option for option in options if option.startswith("DOT")]
+            radio_options = [option for option in options if option.startswith("Micro Radio")]
+        else:
+            radio_options = [option for option in options if option.startswith("DOT")]
         technology = _intake_technology(intake_data)
         allowed_bands = _deployment_allowed_bands(intake_data)
         compatible_options = []
-        for option in dot_options:
+        for option in radio_options:
             try:
                 supported = set(get_supported_bands(option, technology=technology))
             except ValueError:
@@ -478,7 +473,7 @@ def get_filtered_step_options(step, intake_data):
     if step["key"] == "Limit_freq_type":
         dot_model = intake_data.get("dot_type", "")
         allowed = _deployment_allowed_bands(intake_data)
-        if not str(dot_model).strip() or str(dot_model).startswith("Micro"):
+        if not str(dot_model).strip():
             return [band for band in options if band in allowed]
         variant = intake_data.get("dot_variant_kry")
         technology = _intake_technology(intake_data)
@@ -999,7 +994,7 @@ if st.session_state.rf_intake_step >= total_steps:
                     intake_data.get("Coverage_type", "5G"),
                 )
                 if selected_radio_characteristics is None:
-                    raise ValueError(selected_radio_error or "Select a supported Radio Dot configuration.")
+                    raise ValueError(selected_radio_error or "Select a supported radio configuration.")
                 radio_inputs = dict(intake_data)
                 radio_inputs.update({
                     "technology": technology,
@@ -1053,21 +1048,37 @@ if st.session_state.rf_intake_step >= total_steps:
             st.subheader(f"Step 2 - {result_technology} Coverage Results")
             equipment_summary = summarize_building_equipment(coverage_result_df)
             if equipment_summary["Total_Required_DOTs_Radios"] > 0:
-                average_col, dot_col, iru_col, bbu_col = st.columns(4)
-                average_col.metric(
-                    "Average sq ft / DOT",
-                    f"{equipment_summary['Average_sqft_per_DOT_Radio']:,.0f}",
-                )
-                dot_col.metric(
-                    "Total required DOTs/Radios",
-                    f"{equipment_summary['Total_Required_DOTs_Radios']:,}",
-                )
-                iru_col.metric("Total IRUs", f"{equipment_summary['Total_IRUs']:,}")
-                bbu_col.metric("Total BBUs", f"{equipment_summary['Total_BBUs']:,}")
-                st.caption(
-                    "Average sq ft / DOT equals total modeled building area divided by total required radios. "
-                    "IRUs are rounded up at 7 DOTs/Radios per IRU; BBUs are rounded up at 12 IRUs per BBU."
-                )
+                selected_model = str(st.session_state.mapl_result.get("Dot_Model", ""))
+                if selected_model.startswith("Micro Radio"):
+                    average_col, radio_col = st.columns(2)
+                    average_col.metric(
+                        "Average sq ft / Micro Radio",
+                        f"{equipment_summary['Average_sqft_per_DOT_Radio']:,.0f}",
+                    )
+                    radio_col.metric(
+                        "Total required Micro Radios",
+                        f"{equipment_summary['Total_Required_DOTs_Radios']:,}",
+                    )
+                    st.caption(
+                        "Micro Radio count is coverage based. IRU and BBU quantities are not shown because "
+                        "the reference table does not define a Micro Radio-to-baseband equipment ratio."
+                    )
+                else:
+                    average_col, dot_col, iru_col, bbu_col = st.columns(4)
+                    average_col.metric(
+                        "Average sq ft / DOT",
+                        f"{equipment_summary['Average_sqft_per_DOT_Radio']:,.0f}",
+                    )
+                    dot_col.metric(
+                        "Total required DOTs/Radios",
+                        f"{equipment_summary['Total_Required_DOTs_Radios']:,}",
+                    )
+                    iru_col.metric("Total IRUs", f"{equipment_summary['Total_IRUs']:,}")
+                    bbu_col.metric("Total BBUs", f"{equipment_summary['Total_BBUs']:,}")
+                    st.caption(
+                        "Average sq ft / DOT equals total modeled building area divided by total required radios. "
+                        "IRUs are rounded up at 7 DOTs/Radios per IRU; BBUs are rounded up at 12 IRUs per BBU."
+                    )
             else:
                 st.warning("No model-valid building equipment summary is available for these results.")
 
