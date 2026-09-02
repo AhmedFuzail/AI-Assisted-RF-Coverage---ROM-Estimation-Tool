@@ -747,6 +747,14 @@ if st.session_state.rf_intake_step < total_steps:
                 st.session_state.rf_intake_data.pop("Limit_freq_type", None)
             if current_step["key"] == "dot_variant_kry":
                 st.session_state.rf_intake_data.pop("Limit_freq_type", None)
+            if current_step["key"] == "Limit_freq_type":
+                if (
+                    st.session_state.rf_intake_data.get("Operator_type") == "Enterprise 5G Coverage"
+                    and cleaned_value == "B77D"
+                ):
+                    st.session_state.rf_intake_data["target_rsrp"] = -100
+                elif st.session_state.rf_intake_data.get("Operator_type") == "Enterprise 5G Coverage":
+                    st.session_state.rf_intake_data.pop("target_rsrp", None)
             if current_step["key"] == "Operator_type":
                 if cleaned_value == "Enterprise Private 5G":
                     st.session_state.rf_intake_data["Coverage_type"] = "5G"
