@@ -2,10 +2,10 @@ import streamlit as st
 import math
 import os
 import pandas as pd
-import json
+import time
 from html import escape
-from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+
+from address_lookup import search_address
 
 from coverage_engine import (
     calculate_coverage_for_all_buildings,
@@ -262,38 +262,6 @@ def render_structure_note_tooltips(structure_df):
     <div class='subtype-note-wrap'>{''.join(note_items)}</div>
     """
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def search_address_suggestions(query):
-    if len(query.strip()) < 3:
-        return []
-
-    params = urlencode({
-        "q": query.strip(),
-        "format": "json",
-        "addressdetails": 1,
-        "limit": 5,
-    })
-    request = Request(
-        f"https://nominatim.openstreetmap.org/search?{params}",
-        headers={"User-Agent": "Ericsson-RF-ROM-UX-Prototype/1.0"},
-    )
-
-    try:
-        with urlopen(request, timeout=5) as response:
-            results = json.loads(response.read().decode("utf-8"))
-    except Exception:
-        return []
-
-    return [
-        {
-            "label": result.get("display_name", "Unknown address"),
-            "latitude": float(result["lat"]),
-            "longitude": float(result["lon"]),
-        }
-        for result in results
-        if result.get("lat") and result.get("lon")
-    ]
-
 if "location_latitude" not in st.session_state:
     st.session_state.location_latitude = 37.493544
 if "location_longitude" not in st.session_state:
@@ -302,36 +270,81 @@ if "selected_address" not in st.session_state:
     st.session_state.selected_address = ""
 if "show_project_map" not in st.session_state:
     st.session_state.show_project_map = False
+if "address_suggestions" not in st.session_state:
+    st.session_state.address_suggestions = []
+if "address_search_query" not in st.session_state:
+    st.session_state.address_search_query = ""
+if "address_search_error" not in st.session_state:
+    st.session_state.address_search_error = None
+if "last_address_search_at" not in st.session_state:
+    st.session_state.last_address_search_at = 0.0
+if "location_latitude_input" not in st.session_state:
+    st.session_state.location_latitude_input = st.session_state.location_latitude
+if "location_longitude_input" not in st.session_state:
+    st.session_state.location_longitude_input = st.session_state.location_longitude
 
 st.subheader("Project Location")
 address_query = st.text_input(
     "Address (optional)",
     value=st.session_state.selected_address,
-    placeholder="Start typing a street address, venue, or city",
+    placeholder="Enter a street address, venue, or city",
 )
+normalized_address_query = address_query.strip()
 
-address_suggestions = search_address_suggestions(address_query)
-if address_query.strip() and len(address_query.strip()) < 3:
-    st.caption("Type at least 3 characters to search for address suggestions.")
-elif address_query.strip() and not address_suggestions:
-    st.caption("No address suggestions found yet. You can still enter latitude and longitude manually below.")
+if st.button("Search address", disabled=len(normalized_address_query) < 3):
+    st.session_state.address_search_query = normalized_address_query
+    elapsed_seconds = time.monotonic() - st.session_state.last_address_search_at
+    if elapsed_seconds < 1:
+        st.session_state.address_suggestions = []
+        st.session_state.address_search_error = "Please wait a moment before searching again."
+    else:
+        suggestions, error = search_address(normalized_address_query)
+        st.session_state.address_suggestions = suggestions
+        st.session_state.address_search_error = error
+        st.session_state.last_address_search_at = time.monotonic()
+
+address_suggestions = (
+    st.session_state.address_suggestions
+    if st.session_state.address_search_query == normalized_address_query
+    else []
+)
+address_search_error = (
+    st.session_state.address_search_error
+    if st.session_state.address_search_query == normalized_address_query
+    else None
+)
+if normalized_address_query and len(normalized_address_query) < 3:
+    st.caption("Enter at least three characters, then select Search address.")
+elif address_search_error:
+    st.warning(address_search_error)
 
 if address_suggestions:
     suggestion_labels = [suggestion["label"] for suggestion in address_suggestions]
     selected_address_label = st.selectbox("Suggested addresses", suggestion_labels)
     selected_suggestion = address_suggestions[suggestion_labels.index(selected_address_label)]
 
-    address_action_col, map_action_col = st.columns([1, 1])
-    with address_action_col:
-        if st.button("Use selected address"):
-            st.session_state.selected_address = selected_suggestion["label"]
-            st.session_state.location_latitude = selected_suggestion["latitude"]
-            st.session_state.location_longitude = selected_suggestion["longitude"]
-            st.rerun()
-    with map_action_col:
-        if st.button("Show/Hide Map"):
-            st.session_state.show_project_map = not st.session_state.show_project_map
-            st.rerun()
+    if st.button("Use selected address"):
+        st.session_state.selected_address = selected_suggestion["label"]
+        st.session_state.location_latitude = selected_suggestion["latitude"]
+        st.session_state.location_longitude = selected_suggestion["longitude"]
+        st.session_state.location_latitude_input = selected_suggestion["latitude"]
+        st.session_state.location_longitude_input = selected_suggestion["longitude"]
+        st.rerun()
+
+coordinate_col, map_action_col = st.columns([3, 1])
+with coordinate_col:
+    latitude_col, longitude_col = st.columns(2)
+    with latitude_col:
+        st.number_input("Latitude", format="%.6f", key="location_latitude_input")
+    with longitude_col:
+        st.number_input("Longitude", format="%.6f", key="location_longitude_input")
+with map_action_col:
+    if st.button("Show/Hide Map"):
+        st.session_state.show_project_map = not st.session_state.show_project_map
+        st.rerun()
+st.session_state.location_latitude = st.session_state.location_latitude_input
+st.session_state.location_longitude = st.session_state.location_longitude_input
+st.caption("Address search is powered by OpenStreetMap Nominatim. Search only when needed; coordinates can be entered manually.")
 
 Loc_data = {
     "latitude": [st.session_state.location_latitude],

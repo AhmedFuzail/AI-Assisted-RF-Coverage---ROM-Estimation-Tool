@@ -78,12 +78,13 @@ flowchart TD
 
 ### 4.1 Project location
 
-The user may enter an optional address. After at least three characters:
+The user may enter an optional address and explicitly select **Search address** after entering at least three characters. The application does not send lookup requests while the user is typing.
 
-1. `search_address_suggestions()` calls the OpenStreetMap Nominatim search endpoint.
+1. `address_lookup.search_address()` calls the OpenStreetMap Nominatim search endpoint.
 2. Up to five suggestions are returned.
-3. Selecting an address updates `location_latitude` and `location_longitude` in Streamlit session state.
-4. The map is displayed only when the user toggles it.
+3. A service, timeout, or rate-limit error is shown to the user; it is not represented as an empty search result.
+4. Selecting an address, or manually entering coordinates, updates `location_latitude` and `location_longitude` in Streamlit session state.
+5. The map is displayed only when the user toggles it.
 
 The address, latitude and longitude are displayed in the RF Intake Summary. They do **not** currently change MAPL, propagation coefficients, regional bands, regulatory limits, or coverage.
 

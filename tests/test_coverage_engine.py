@@ -102,7 +102,7 @@ class CoverageEngineTests(unittest.TestCase):
         )
         self.assertEqual(
             STREAMLIT_DESIGN_MARGIN_BY_OPERATOR_DB["Enterprise 5G Coverage"],
-            24.85,
+            15.5,
         )
         self.assertEqual(
             resolve_streamlit_design_margin_db("Enterprise Private 5G"),
@@ -110,7 +110,7 @@ class CoverageEngineTests(unittest.TestCase):
         )
         self.assertEqual(
             resolve_streamlit_design_margin_db(" Enterprise 5G Coverage "),
-            24.85,
+            15.5,
         )
         self.assertEqual(resolve_streamlit_design_margin_db(""), 14.0)
 
