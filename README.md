@@ -69,7 +69,7 @@ Unsupported model/band/technology combinations, out-of-range frequencies, invali
 | `target_rsrp` | `target_rsrp_dbm` |
 | Hidden Streamlit design policy | `margin_db` |
 
-LTE currently defaults to 20 MHz. NR currently defaults to 40 MHz at 30 kHz SCS. The live Streamlit workflow currently passes a hidden fixed 14 dB design margin. These values are centralized in the MAPL configuration mapping so later intake fields can replace them without changing the RF formula.
+LTE currently defaults to 20 MHz. NR currently defaults to 40 MHz at 30 kHz SCS. The live Streamlit workflow selects a hidden calibrated design margin from `Operator_type`: 15.5 dB for Enterprise Private 5G and 24.85 dB for Enterprise 5G Coverage. Unknown or non-Streamlit callers retain the prior 14 dB policy fallback. These values are centralized without changing the RF formula.
 
 ## Power and MAPL Rules
 
@@ -144,7 +144,7 @@ characteristics = get_radio_dot_characteristics(
 
 The Streamlit model, variant, band, power, branch count, antenna gain, duplex mode, and operating range now come from the CSV for both Radio Dot and Micro Radio selections. Micro Radio coverage counts are calculated, but IRU/BBU conversion is intentionally not displayed because the RF table does not define a Micro Radio-to-baseband equipment ratio.
 
-For DOT-IRU-BBU selections, Enterprise Private 5G exposes DOT 4459 only; Enterprise 5G Coverage exposes DOT 2274, DOT 4455, and DOT 4459. Coverage Focused equipment summaries use 7 DOTs per IRU, while Capacity Focused summaries use 5.5 DOTs per IRU. The guided intake supports targeted field edits after completion and recalculates dependent selections when an upstream answer changes.
+For DOT-IRU-BBU selections, Enterprise Private 5G exposes DOT 4459 only; Enterprise 5G Coverage exposes DOT 2274 and DOT 4455. Coverage Focused equipment summaries use 7 DOTs per IRU, while Capacity Focused summaries use 5.5 DOTs per IRU. The guided intake supports targeted field edits after completion, recalculates dependent selections when an upstream answer changes, and persists manual building sub-area percentage overrides for the active session.
 
 ## Extending the Table
 

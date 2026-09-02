@@ -6,6 +6,19 @@ import pandas as pd
 
 SQFT_PER_M2 = 10.7639104167
 STREAMLIT_DESIGN_MARGIN_DB = 14.0
+STREAMLIT_DESIGN_MARGIN_BY_OPERATOR_DB = {
+    "Enterprise Private 5G": 15.5,
+    "Enterprise 5G Coverage": 24.85,
+}
+
+
+def resolve_streamlit_design_margin_db(operator_type):
+    """Return the calibrated Streamlit design margin for a deployment type."""
+    normalized_operator = " ".join(str(operator_type or "").strip().split()).casefold()
+    for design_type, margin_db in STREAMLIT_DESIGN_MARGIN_BY_OPERATOR_DB.items():
+        if normalized_operator == design_type.casefold():
+            return margin_db
+    return STREAMLIT_DESIGN_MARGIN_DB
 
 BAND_CENTER_FREQUENCY_MHZ = {
     "B48-CBRS": 3625.0,
@@ -131,7 +144,6 @@ FIELD_ALIASES = {
     "Environment_Type": ("Environment_Type", "environment_type"),
     "Layout_Complexity": ("Layout_Complexity", "layout_complexity"),
     "Ceiling_Height_Class": ("Ceiling_Height_Class", "ceiling_height_class"),
-    "Mobility_Pattern": ("Mobility_Pattern", "mobility_pattern"),
     "Concrete_%": ("Concrete_%", "concrete_pct"),
     "Drywall_%": ("Drywall_%", "drywall_pct"),
     "Glass_%": ("Glass_%", "glass_pct"),

@@ -7,9 +7,9 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from coverage_engine import (
-    STREAMLIT_DESIGN_MARGIN_DB,
     calculate_coverage_for_all_buildings,
     resolve_technology,
+    resolve_streamlit_design_margin_db,
     summarize_building_equipment,
 )
 from radio_reference import (
@@ -20,6 +20,10 @@ from radio_reference import (
     get_radio_dot_variants,
     get_radio_dot_models,
     get_supported_bands,
+)
+from structure_editor_state import (
+    apply_area_percentage_edits,
+    reconcile_area_percentages,
 )
 st.set_page_config(
     page_title="Ericsson RF ROM Tool - Simplified",
@@ -342,7 +346,6 @@ intake_steps = [
     {"key": "Operator_type", "label": "Operator Type", "prompt": "What operator or deployment model applies?", "description": "Select the deployment type used to determine available radios, bands, and technology.", "type": "select", "options": ["Enterprise Private 5G", "Enterprise 5G Coverage"]},
     {"key": "Coverage_type", "label": "Coverage Type", "prompt": "Which coverage technology should be calculated?", "description": "Choose whether the public-coverage estimate uses LTE (4G) or NR (5G).", "type": "select", "options": ["4G", "5G"]},
     {"key": "target_rsrp", "label": "Target RSRP (Recommended at -95 for standard EP5G designs)", "prompt": "What target RSRP should the private 5G design use?", "description": "Set the minimum design RSRP target used by the private 5G MAPL calculation.", "type": "range_slider", "default": -95, "min": -120, "max": -80, "step": 1},
-    {"key": "Mobility_type", "label": "Mobility Requirement", "prompt": "What mobility requirement should the design support?", "description": "Describe expected user movement; this is retained as an RF design requirement.", "type": "select", "options": ["Low Mobility", "High Mobility"]},
     {"key": "dot_type", "label": "Radio Model", "prompt": "Which indoor radio model should be assumed?", "description": "Select the radio whose reference transmit power and antenna gain feed the MAPL.", "type": "select", "options": get_radio_dot_models()},
     {"key": "dot_variant_kry", "label": "Hardware Variant", "prompt": "Which hardware variant applies?", "description": "Choose the hardware variant that supports the required band and RF characteristics.", "type": "select", "options": []},
     {"key": "Limit_freq_type", "label": "Highest Frequency Band", "prompt": "What is the highest limiting frequency band?", "description": "Select the operating band whose center frequency is used by the coverage model.", "type": "select", "options": ["B25", "B66", "B41", "B41K", "B48", "B77G", "B77D"]},
@@ -463,7 +466,7 @@ def get_filtered_step_options(step, intake_data):
             if operator_type == "Enterprise Private 5G":
                 radio_options = [option for option in radio_options if option == "DOT 4459"]
             elif operator_type == "Enterprise 5G Coverage":
-                radio_options = [option for option in radio_options if option in {"DOT 2274", "DOT 4455", "DOT 4459"}]
+                radio_options = [option for option in radio_options if option in {"DOT 2274", "DOT 4455"}]
         technology = _intake_technology(intake_data)
         allowed_bands = _deployment_allowed_bands(intake_data)
         compatible_options = []
@@ -510,6 +513,13 @@ def synchronize_derived_intake_values(intake_data):
     intake_data["power_sharing"] = operator_count > 1
 
 
+def persist_structure_area_edits(editor_key, area_values_key):
+    st.session_state[area_values_key] = apply_area_percentage_edits(
+        st.session_state.get(area_values_key, []),
+        st.session_state.get(editor_key, {}),
+    )
+
+
 def clear_cached_rf_results():
     st.session_state.mapl_result = None
     st.session_state.mapl_result_df = None
@@ -543,6 +553,7 @@ if "coverage_result_df" not in st.session_state:
 if "coverage_result_error" not in st.session_state:
     st.session_state.coverage_result_error = ""
 total_steps = len(intake_steps)
+st.session_state.rf_intake_data.pop("Mobility_type", None)
 synchronize_derived_intake_values(st.session_state.rf_intake_data)
 
 
@@ -891,12 +902,18 @@ if st.session_state.rf_intake_step >= total_steps:
             ignore_index=True,
         )
 
-        edited_structure_df = display_structure_df.copy()
         structure_table_key = f"structure_area_table_{selected_building_type}_{selected_building_category}"
-        saved_table_edits = st.session_state.get(structure_table_key, {}).get("edited_rows", {})
-        for row_index, row_edits in saved_table_edits.items():
-            if "Sub_Type_Area_%" in row_edits:
-                edited_structure_df.loc[int(row_index), "Sub_Type_Area_%"] = row_edits["Sub_Type_Area_%"]
+        structure_area_values_key = f"structure_area_values::{selected_building_type}::{selected_building_category}"
+        base_area_pct_values = pd.to_numeric(
+            display_structure_df["Sub_Type_Area_%"],
+            errors="coerce",
+        ).fillna(0).tolist()
+        st.session_state[structure_area_values_key] = reconcile_area_percentages(
+            base_area_pct_values,
+            st.session_state.get(structure_area_values_key),
+        )
+        edited_structure_df = display_structure_df.copy()
+        edited_structure_df["Sub_Type_Area_%"] = st.session_state[structure_area_values_key]
 
         try:
             total_coverage_sqft = float(str(st.session_state.rf_intake_data.get("total_sqft", "0")).replace(",", ""))
@@ -943,8 +960,15 @@ if st.session_state.rf_intake_step >= total_steps:
                         ),
                     },
                     key=structure_table_key,
+                    on_change=persist_structure_area_edits,
+                    args=(structure_table_key, structure_area_values_key),
                 )
-                edited_structure_df["Sub_Type_Area_%"] = edited_visible_structure_df["Sub_Type_Area_%"]
+                edited_area_values = reconcile_area_percentages(
+                    base_area_pct_values,
+                    edited_visible_structure_df["Sub_Type_Area_%"].tolist(),
+                )
+                st.session_state[structure_area_values_key] = edited_area_values
+                edited_structure_df["Sub_Type_Area_%"] = edited_area_values
                 edited_area_pct_values = pd.to_numeric(edited_structure_df["Sub_Type_Area_%"], errors="coerce").fillna(0)
                 edited_structure_df["Coverage Area"] = (total_coverage_sqft * edited_area_pct_values / 100).round(0).astype(int)
                 st.caption("Coverage Area is calculated from Total Sq.Ft Coverage and each Sub Type Area %. Hover over the info icons beside each Sub Type A to view RF floorplan match notes.")
@@ -1022,7 +1046,6 @@ if st.session_state.rf_intake_step >= total_steps:
             "Ceiling_Height_Class",
             "Environment_Type",
             "Layout_Complexity",
-            "Mobility_Pattern",
             "Total Losses Material",
             "Total Loss Density",
             "Total Loss",
@@ -1049,9 +1072,10 @@ if st.session_state.rf_intake_step >= total_steps:
                 hide_index=True,
             )
 
-        margin_db = STREAMLIT_DESIGN_MARGIN_DB
-
         intake_data = st.session_state.rf_intake_data
+        margin_db = resolve_streamlit_design_margin_db(
+            intake_data.get("Operator_type", "")
+        )
         selected_radio_characteristics = None
         selected_radio_error = ""
         try:
