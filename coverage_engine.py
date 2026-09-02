@@ -8,7 +8,7 @@ SQFT_PER_M2 = 10.7639104167
 STREAMLIT_DESIGN_MARGIN_DB = 14.0
 STREAMLIT_DESIGN_MARGIN_BY_OPERATOR_DB = {
     "Enterprise Private 5G": 15.5,
-    "Enterprise 5G Coverage": 24.85,
+    "Enterprise 5G Coverage": 15.5,
 }
 
 
