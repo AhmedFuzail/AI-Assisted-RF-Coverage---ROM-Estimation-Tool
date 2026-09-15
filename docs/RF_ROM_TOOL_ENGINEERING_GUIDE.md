@@ -111,6 +111,21 @@ Three helper functions control navigation:
 
 The progress bar is therefore based on the currently visible questions, not the static number of definitions. After completion, **Modify intake** lets the user select one previously answered field, preserve the other answers, and revisit only dependencies invalidated by that change.
 
+#### Simplified intake rules
+
+In `simplified_ui.py`, **Number of Floors** is skipped and excluded from the summary and edit menu. It does not affect current RF calculations. Existing stored floor counts are retained for compatibility.
+
+Equipment and radio names use the following display labels in the intake, edit menu, and summary. The original keys remain in session state and are passed to the RF and hardware lookup functions:
+
+| Stored key | Display label |
+| --- | --- |
+| `DOT-IRU-BBU` | Radio Dot Solution |
+| `Micro-BBU` | Micro Radio Solution |
+| `DOT 2274` | DOT 2274 : AWS/PCS |
+| `DOT 4455` | DOT 4455 : C-band / B41 |
+
+**Operators on Highest Band** is automatic and cannot be edited. Enterprise 5G Coverage uses 2 operators for `B77D`, `B41`, and `B77G`, and 3 for any other band, including `B41K`. Enterprise Private 5G uses 1. The derived count appears in the summary and feeds the existing power-sharing calculation, `10 * log10(operator_count)` dB. Band or deployment edits update the count and clear prior RF results; sessions saved with a different count are also invalidated. These rules apply to both Radio Dot and Micro Radio solutions in the simplified UI. `main.py` retains its existing intake behavior.
+
 ### 4.3 Building and clutter model
 
 After intake completion:

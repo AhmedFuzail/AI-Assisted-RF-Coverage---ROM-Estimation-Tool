@@ -80,9 +80,26 @@ ericsson_logo = st.image(os.path.join(os.getcwd(),"static","Ericsson_logo.svg.pn
 title_Main = st.title("Ericsson AI-Assisted RF ROM Estimation Tool")
 
 
+INTAKE_DISPLAY_LABELS = {
+    "sol_type": {
+        "DOT-IRU-BBU": "Radio Dot Solution",
+        "Micro-BBU": "Micro Radio Solution",
+    },
+    "dot_type": {
+        "DOT 2274": "DOT 2274 : AWS/PCS",
+        "DOT 4455": "DOT 4455 : C-band / B41",
+    },
+}
+
+
+def format_intake_value(key, value):
+    """Display intake labels while retaining the RF database's lookup keys."""
+    return INTAKE_DISPLAY_LABELS.get(key, {}).get(str(value).strip(), value)
+
+
 def mapl_result_to_table(result):
     rows = [
-        ("Radio Dot", result["Dot_Model"], ""),
+        ("Radio Dot", format_intake_value("dot_type", result["Dot_Model"]), ""),
         ("Hardware Variant", result["Dot_Variant_KRY"], ""),
         ("Band", result["Band"], ""),
         ("Technology", result["Technology"], ""),
@@ -357,7 +374,7 @@ intake_steps = [
     {"key": "Customer_name", "label": "Customer Name", "prompt": "Who is the customer?", "description": "Please provide the end customer or enterprise name.", "type": "text", "default": ""},
     {"key": "venue_name", "label": "Venue Name", "prompt": "What is the venue or project name?", "description": "Identify the building, campus, or project this estimate represents.", "type": "text", "default": ""},
     {"key": "total_sqft", "label": "Total Sq.Ft Coverage", "prompt": "How much total indoor coverage area should be estimated?", "description": "Enter the combined indoor area that requires RF coverage.", "type": "text", "default": "100000"},
-    {"key": "number_of_floors", "label": "Number of Floors", "prompt": "How many floors should be included in the estimate?", "description": "Record how many floors are included in the stated total coverage area.", "type": "text", "default": "1"},
+    {"key": "number_of_floors", "label": "Number of Floors", "prompt": "How many floors should be included in the estimate?", "description": "Record how many floors are included in the stated total coverage area.", "type": "text", "default": "1", "hidden": True},
     {"key": "Building_type", "label": "General Building Type", "prompt": "What general building type best describes the site?", "description": "Select the broad venue class used to load building and RF assumptions.", "type": "select", "options": building_type_options},
     {"key": "Building_category", "label": "Building Category", "prompt": "Which building category best matches the floorplan?", "description": "Refine the venue profile used to select structure and clutter assumptions.", "type": "select", "options": []},
     {"key": "use_case_type", "label": "Use Case Type", "prompt": "What is the main design intent?", "description": "For DOT architectures, Coverage Focused uses 7 DOTs per IRU; Capacity Focused uses 5.5.", "type": "select", "options": ["Coverage Focused", "Capacity Focused"]},
@@ -368,7 +385,7 @@ intake_steps = [
     {"key": "dot_type", "label": "Radio Model", "prompt": "Which indoor radio model should be assumed?", "description": "Select the radio whose reference transmit power and antenna gain feed the MAPL.", "type": "select", "options": get_radio_dot_models()},
     {"key": "dot_variant_kry", "label": "Hardware Variant", "prompt": "Which hardware variant applies?", "description": "Choose the hardware variant that supports the required band and RF characteristics.", "type": "select", "options": []},
     {"key": "Limit_freq_type", "label": "Highest Frequency Band", "prompt": "What is the highest limiting frequency band?", "description": "Select the operating band whose center frequency is used by the coverage model.", "type": "select", "options": ["B25", "B66", "B41", "B41K", "B48", "B77G", "B77D"]},
-    {"key": "Operator_count", "label": "Operators on Highest Band", "prompt": "How many operators use the highest frequency band?", "description": "Radio power per branch is split equally when more than one operator uses this band.", "type": "slider", "options": [1, 2, 3]},
+    {"key": "Operator_count", "label": "Operators on Highest Band", "prompt": "How many operators use the highest frequency band?", "description": "Set automatically: Enterprise 5G Coverage uses 2 for B77D, B41, and B77G, and 3 for other bands; Private 5G uses 1.", "type": "slider", "options": [1, 2, 3]},
     {"key": "Max_lim_channel_count", "label": "Max Channels on Highest Band", "prompt": "What is the max number of highest-band channels for one operator?", "description": "Fixed to one channel for the current ROM model.", "type": "slider", "options": [1], "hidden": True},
     {"key": "power_sharing", "label": "Power Sharing", "prompt": "Is power shared between multiple operators?", "description": "Derived automatically from the number of operators on the highest band.", "type": "checkbox", "default": False, "hidden": True},
 ]
@@ -412,7 +429,7 @@ def should_auto_fill_step(step, intake_data):
         radio_model = str(intake_data.get("dot_type", "")).strip()
         return bool(radio_model) and len(compatible_dot_variant_options(intake_data)) == 1
     return (
-        (step["key"] == "Operator_count" and operator_type == "Enterprise Private 5G")
+        (step["key"] == "Operator_count")
         or (step["key"] == "target_rsrp" and operator_type == "Enterprise 5G Coverage")
         or (step["key"] == "Coverage_type" and operator_type != "Enterprise 5G Coverage")
     )
@@ -524,12 +541,15 @@ def clear_incompatible_radio_selection(intake_data):
 
 
 def synchronize_derived_intake_values(intake_data):
-    try:
-        operator_count = max(int(intake_data.get("Operator_count", 1)), 1)
-    except (TypeError, ValueError):
+    previous_operator_count = intake_data.get("Operator_count")
+    if intake_data.get("Operator_type") == "Enterprise 5G Coverage":
+        operator_count = 2 if intake_data.get("Limit_freq_type") in {"B77D", "B41", "B77G"} else 3
+    else:
         operator_count = 1
+    intake_data["Operator_count"] = operator_count
     intake_data["Max_lim_channel_count"] = 1
     intake_data["power_sharing"] = operator_count > 1
+    return previous_operator_count != operator_count
 
 
 def persist_structure_area_edits(editor_key, area_values_key):
@@ -573,7 +593,8 @@ if "coverage_result_error" not in st.session_state:
     st.session_state.coverage_result_error = ""
 total_steps = len(intake_steps)
 st.session_state.rf_intake_data.pop("Mobility_type", None)
-synchronize_derived_intake_values(st.session_state.rf_intake_data)
+if synchronize_derived_intake_values(st.session_state.rf_intake_data):
+    clear_cached_rf_results()
 
 
 def finish_saved_intake_step():
@@ -594,7 +615,11 @@ while st.session_state.rf_intake_step < total_steps:
     auto_fill_step = intake_steps[st.session_state.rf_intake_step]
     if not should_auto_fill_step(auto_fill_step, st.session_state.rf_intake_data):
         break
-    if auto_fill_step["key"] == "Max_lim_channel_count":
+    if auto_fill_step["key"] == "number_of_floors":
+        st.session_state.rf_intake_data.setdefault("number_of_floors", 1)
+    elif auto_fill_step["key"] == "Operator_count":
+        synchronize_derived_intake_values(st.session_state.rf_intake_data)
+    elif auto_fill_step["key"] == "Max_lim_channel_count":
         st.session_state.rf_intake_data[auto_fill_step["key"]] = 1
     elif auto_fill_step["key"] == "power_sharing":
         operator_count = max(int(st.session_state.rf_intake_data.get("Operator_count", 1)), 1)
@@ -678,13 +703,18 @@ if st.session_state.rf_intake_step < total_steps:
                     current_step["label"],
                     options,
                     index=selected_index,
-                    format_func=lambda variant: format_dot_variant_option(
+                    format_func=lambda variant, intake_data=dict(st.session_state.rf_intake_data): format_dot_variant_option(
                         variant,
-                        st.session_state.rf_intake_data,
+                        intake_data,
                     ),
                 )
             else:
-                step_value = st.selectbox(current_step["label"], options, index=selected_index)
+                step_value = st.selectbox(
+                    current_step["label"],
+                    options,
+                    index=selected_index,
+                    format_func=lambda value: format_intake_value(current_step["key"], value),
+                )
         elif current_step["type"] == "slider":
             options = current_step["options"]
             selected_index = options.index(existing_value) if existing_value in options else 0
@@ -840,9 +870,9 @@ else:
         selected_edit_index = st.selectbox(
             "Select an intake field to modify",
             editable_indices,
-            format_func=lambda index: (
+            format_func=lambda index, intake_data=dict(st.session_state.rf_intake_data): (
                 f"{intake_steps[index]['label']}: "
-                f"{st.session_state.rf_intake_data.get(intake_steps[index]['key'], 'Not entered')}"
+                f"{format_intake_value(intake_steps[index]['key'], intake_data.get(intake_steps[index]['key'], 'Not entered'))}"
             ),
             key="rf_intake_edit_field",
         )
@@ -858,7 +888,7 @@ location_summary_rows = [
 ]
 
 summary_rows = location_summary_rows + [
-    {"Field": step["label"], "Value": st.session_state.rf_intake_data[step["key"]]}
+    {"Field": step["label"], "Value": format_intake_value(step["key"], st.session_state.rf_intake_data[step["key"]])}
     for step in intake_steps
     if step["key"] in st.session_state.rf_intake_data and not step.get("hidden", False)
 ]
