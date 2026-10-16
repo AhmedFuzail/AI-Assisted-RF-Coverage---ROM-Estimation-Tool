@@ -14,6 +14,7 @@ from coverage_engine import (
     summarize_building_equipment,
 )
 from radio_reference import (
+    PRIVATE_5G_BANDWIDTH_MHZ,
     apply_tx_power_policy,
     build_radio_mapl_config,
     calculate_mapl,
@@ -23,6 +24,12 @@ from radio_reference import (
     get_radio_dot_models,
     get_supported_bands,
     reference_table_display_rows,
+    tx_power_upper_bound_dbm,
+)
+from radio_selection import (
+    compatible_radio_choices, reconcile_radio_selection,
+    save_radio_choice, selected_radio_choice, selection_allowed_bands,
+    synchronize_coverage_type,
 )
 from structure_editor_state import (
     apply_area_percentage_edits,
@@ -84,7 +91,7 @@ title_Main = st.title("Ericsson AI-Assisted RF ROM Estimation Tool")
 
 def mapl_result_to_table(result):
     rows = [
-        ("Radio Dot", result["Dot_Model"], ""),
+        ("Radio Model", result["Dot_Model"], ""),
         ("Hardware Variant", result["Dot_Variant_KRY"], ""),
         ("Band", result["Band"], ""),
         ("Technology", result["Technology"], ""),
@@ -367,13 +374,13 @@ intake_steps = [
     {"key": "Building_type", "label": "General Building Type", "prompt": "What general building type best describes the site?", "description": "Select the broad venue class used to load building and RF assumptions.", "type": "select", "options": building_type_options},
     {"key": "Building_category", "label": "Building Category", "prompt": "Which building category best matches the floorplan?", "description": "Refine the venue profile used to select structure and clutter assumptions.", "type": "select", "options": []},
     {"key": "use_case_type", "label": "Use Case Type", "prompt": "What is the main design intent?", "description": "For DOT architectures, Coverage Focused uses 7 DOTs per IRU; Capacity Focused uses 5.5.", "type": "select", "options": ["Coverage Focused", "Capacity Focused"]},
-    {"key": "sol_type", "label": "Equipment Type", "prompt": "Which equipment architecture should the ROM assume?", "description": "Choose the radio architecture used to filter compatible radio models and BOM equipment.", "type": "select", "options": ["DOT-IRU-BBU", "Micro-BBU"]},
+    {"key": "sol_type", "label": "Equipment Type", "prompt": "Which equipment architecture should the ROM assume?", "description": "Choose DOT-IRU-BBU for Radio Dots, Micro-BBU for Micro Radios, or Radio-BBU for Radio 4461HP and Radio 2271.", "type": "select", "options": ["DOT-IRU-BBU", "Micro-BBU", "Radio-BBU"]},
     {"key": "Operator_type", "label": "Operator Type", "prompt": "What operator or deployment model applies?", "description": "Select the deployment type used to determine available radios, bands, and technology.", "type": "select", "options": ["Enterprise Private 5G", "Enterprise 5G Coverage"]},
-    {"key": "Coverage_type", "label": "Coverage Type", "prompt": "Which coverage technology should be calculated?", "description": "Choose whether the public-coverage estimate uses LTE (4G) or NR (5G).", "type": "select", "options": ["4G", "5G"]},
+    {"key": "Coverage_type", "label": "Coverage Type", "prompt": "Which coverage technology should be calculated?", "description": "Choose 4G (LTE) or 5G (NR) for Enterprise 5G Coverage.", "type": "select", "options": ["4G", "5G"]},
     {"key": "target_rsrp", "label": "Target RSRP", "prompt": "What target RSRP should the private 5G design use?", "description": "Set the minimum design RSRP target used by the private 5G MAPL calculation.", "type": "range_slider", "default": -95, "min": -120, "max": -80, "step": 1},
     {"key": "dot_type", "label": "Radio Model", "prompt": "Which indoor radio model should be assumed?", "description": "Select the radio whose reference transmit power and antenna gain feed the MAPL.", "type": "select", "options": get_radio_dot_models()},
     {"key": "dot_variant_kry", "label": "Hardware Variant", "prompt": "Which hardware variant applies?", "description": "Choose the hardware variant that supports the required band and RF characteristics.", "type": "select", "options": []},
-    {"key": "Limit_freq_type", "label": "Highest Frequency Band", "prompt": "What is the highest limiting frequency band?", "description": "Select the operating band whose center frequency is used by the coverage model.", "type": "select", "options": ["B25", "B66", "B41", "B41K", "B48", "B77G", "B77D"]},
+    {"key": "Limit_freq_type", "label": "Highest Frequency Band", "prompt": "What is the highest limiting frequency band?", "description": "Select the operating band whose center frequency is used by the coverage model.", "type": "select", "options": ["B25", "B66", "B41", "B41K", "B48", "B77G", "B77D", "B77S", "B78A", "B78L", "B40", "B28"]},
     {"key": "Operator_count", "label": "Operators on Highest Band", "prompt": "How many operators use the highest frequency band?", "description": "Radio power per branch is split equally when more than one operator uses this band.", "type": "slider", "options": [1, 2, 3]},
     {"key": "Max_lim_channel_count", "label": "Max Channels on Highest Band", "prompt": "What is the max number of highest-band channels for one operator?", "description": "Fixed to one channel for the current ROM model.", "type": "slider", "options": [1], "hidden": True},
     {"key": "power_sharing", "label": "Power Sharing", "prompt": "Is power shared between multiple operators?", "description": "Derived automatically from the number of operators on the highest band.", "type": "checkbox", "default": False, "hidden": True},
@@ -413,6 +420,8 @@ def format_radio_variant_option(variant, intake_data):
 def should_auto_fill_step(step, intake_data):
     operator_type = intake_data.get("Operator_type")
     if step.get("hidden", False):
+        return True
+    if step["key"] == "Limit_freq_type" and intake_data.get("radio_model_band"):
         return True
     if step["key"] == "dot_variant_kry":
         radio_model = str(intake_data.get("dot_type", "")).strip()
@@ -464,13 +473,14 @@ def _intake_technology(intake_data):
 
 
 def _deployment_allowed_bands(intake_data):
-    if intake_data.get("Operator_type") == "Enterprise Private 5G":
-        return {"B48"}
-    return {"B25", "B66", "B41", "B41K", "B77D", "B77G"}
+    return selection_allowed_bands(intake_data)
 
 
 def get_filtered_step_options(step, intake_data):
     options = step.get("options", [])
+
+    if step["key"] == "Operator_type" and intake_data.get("sol_type") == "Radio-BBU":
+        return ["Enterprise 5G Coverage"]
 
     if step["key"] == "Building_category":
         selected_building_type = intake_data.get("Building_type")
@@ -482,27 +492,7 @@ def get_filtered_step_options(step, intake_data):
         return sorted(building_mapping_df["Category"].dropna().unique().tolist())
 
     if step["key"] == "dot_type":
-        equipment_type = intake_data.get("sol_type")
-        if equipment_type == "Micro-BBU":
-            radio_options = [option for option in options if option.startswith("Micro Radio")]
-        else:
-            radio_options = [option for option in options if option.startswith("DOT")]
-            operator_type = intake_data.get("Operator_type")
-            if operator_type == "Enterprise Private 5G":
-                radio_options = [option for option in radio_options if option == "DOT 4459"]
-            elif operator_type == "Enterprise 5G Coverage":
-                radio_options = [option for option in radio_options if option in {"DOT 2274", "DOT 4455"}]
-        technology = _intake_technology(intake_data)
-        allowed_bands = _deployment_allowed_bands(intake_data)
-        compatible_options = []
-        for option in radio_options:
-            try:
-                supported = set(get_supported_bands(option, technology=technology))
-            except ValueError:
-                supported = set()
-            if supported.intersection(allowed_bands):
-                compatible_options.append(option)
-        return compatible_options
+        return compatible_radio_choices(intake_data, _intake_technology(intake_data))
 
     if step["key"] == "dot_variant_kry":
         return compatible_radio_variant_options(intake_data)
@@ -521,21 +511,18 @@ def get_filtered_step_options(step, intake_data):
 
 
 def clear_incompatible_radio_selection(intake_data):
-    radio_step = next(step for step in intake_steps if step["key"] == "dot_type")
-    valid_radio_options = get_filtered_step_options(radio_step, intake_data)
-    if intake_data.get("dot_type") not in valid_radio_options:
-        intake_data.pop("dot_type", None)
-        intake_data.pop("dot_variant_kry", None)
-        intake_data.pop("Limit_freq_type", None)
+    return reconcile_radio_selection(intake_data, _intake_technology(intake_data))
 
 
 def synchronize_derived_intake_values(intake_data):
+    coverage_changed = synchronize_coverage_type(intake_data)
     try:
         operator_count = max(int(intake_data.get("Operator_count", 1)), 1)
     except (TypeError, ValueError):
         operator_count = 1
     intake_data["Max_lim_channel_count"] = 1
     intake_data["power_sharing"] = operator_count > 1
+    return coverage_changed
 
 
 def persist_structure_area_edits(editor_key, area_values_key):
@@ -579,7 +566,22 @@ if "coverage_result_error" not in st.session_state:
     st.session_state.coverage_result_error = ""
 total_steps = len(intake_steps)
 st.session_state.rf_intake_data.pop("Mobility_type", None)
-synchronize_derived_intake_values(st.session_state.rf_intake_data)
+coverage_changed = synchronize_derived_intake_values(st.session_state.rf_intake_data)
+radio_changed = clear_incompatible_radio_selection(st.session_state.rf_intake_data)
+private_bandwidth_changed = (
+    st.session_state.rf_intake_data.get("Operator_type") == "Enterprise Private 5G"
+    and st.session_state.mapl_result is not None
+    and st.session_state.mapl_result.get("Bandwidth_MHz") != PRIVATE_5G_BANDWIDTH_MHZ
+)
+if coverage_changed or radio_changed or private_bandwidth_changed:
+    clear_cached_rf_results()
+if radio_changed:
+    missing_steps = [
+        index for index in visible_step_indices(st.session_state.rf_intake_data)
+        if intake_steps[index]["key"] not in st.session_state.rf_intake_data
+    ]
+    if missing_steps and st.session_state.rf_intake_step > missing_steps[0]:
+        st.session_state.rf_intake_step = missing_steps[0]
 
 
 def finish_saved_intake_step():
@@ -615,6 +617,8 @@ while st.session_state.rf_intake_step < total_steps:
         st.session_state.rf_intake_data.pop(auto_fill_step["key"], None)
     elif auto_fill_step["key"] == "Coverage_type":
         st.session_state.rf_intake_data[auto_fill_step["key"]] = "5G"
+    elif auto_fill_step["key"] == "Limit_freq_type":
+        st.session_state.rf_intake_data[auto_fill_step["key"]] = st.session_state.rf_intake_data["radio_model_band"]
     else:
         st.session_state.rf_intake_data[auto_fill_step["key"]] = 1
     st.session_state.rf_intake_step += 1
@@ -670,6 +674,8 @@ if st.session_state.rf_intake_step < total_steps:
         current_step["key"],
         current_step.get("default", current_step.get("options", [None])[0]),
     )
+    if current_step["key"] == "dot_type":
+        existing_value = selected_radio_choice(st.session_state.rf_intake_data)
 
     is_edit_mode = st.session_state.rf_intake_edit_mode
 
@@ -684,9 +690,9 @@ if st.session_state.rf_intake_step < total_steps:
                     current_step["label"],
                     options,
                     index=selected_index,
-                    format_func=lambda variant: format_radio_variant_option(
+                    format_func=lambda variant, intake_data=dict(st.session_state.rf_intake_data): format_radio_variant_option(
                         variant,
-                        st.session_state.rf_intake_data,
+                        intake_data,
                     ),
                 )
             else:
@@ -766,10 +772,11 @@ if st.session_state.rf_intake_step < total_steps:
                 if saved_category not in valid_category_options:
                     st.session_state.rf_intake_data.pop("Building_category", None)
             if current_step["key"] == "sol_type":
+                if cleaned_value == "Radio-BBU":
+                    st.session_state.rf_intake_data["Operator_type"] = "Enterprise 5G Coverage"
                 clear_incompatible_radio_selection(st.session_state.rf_intake_data)
             if current_step["key"] == "dot_type":
-                st.session_state.rf_intake_data.pop("dot_variant_kry", None)
-                st.session_state.rf_intake_data.pop("Limit_freq_type", None)
+                save_radio_choice(st.session_state.rf_intake_data, cleaned_value)
             if current_step["key"] == "dot_variant_kry":
                 st.session_state.rf_intake_data.pop("Limit_freq_type", None)
             if current_step["key"] == "Limit_freq_type":
@@ -846,9 +853,9 @@ else:
         selected_edit_index = st.selectbox(
             "Select an intake field to modify",
             editable_indices,
-            format_func=lambda index: (
+            format_func=lambda index, intake_data=dict(st.session_state.rf_intake_data): (
                 f"{intake_steps[index]['label']}: "
-                f"{st.session_state.rf_intake_data.get(intake_steps[index]['key'], 'Not entered')}"
+                f"{intake_data.get(intake_steps[index]['key'], 'Not entered')}"
             ),
             key="rf_intake_edit_field",
         )
@@ -1147,7 +1154,7 @@ if st.session_state.rf_intake_step >= total_steps:
                     configured_tx_power_override = st.number_input(
                         "Configured Tx Power Per Branch (dBm)",
                         min_value=-10.0,
-                        max_value=40.0,
+                        max_value=tx_power_upper_bound_dbm(selected_radio_characteristics),
                         value=float(selected_radio_characteristics.default_tx_power_dbm_per_branch),
                         step=0.5,
                         key=f"tx_power_override::{radio_key}",
@@ -1270,6 +1277,7 @@ if st.session_state.rf_intake_step >= total_steps:
                     "bandwidth_mhz": default_bandwidth_mhz(
                         selected_radio_characteristics.band,
                         technology,
+                        intake_data.get("Operator_type"),
                     ),
                     "scs_khz": 30 if technology == "NR" else None,
                     "margin_db": margin_db,
@@ -1320,19 +1328,20 @@ if st.session_state.rf_intake_step >= total_steps:
             )
             if equipment_summary["Total_Required_DOTs_Radios"] > 0:
                 selected_model = str(st.session_state.mapl_result.get("Dot_Model", ""))
-                if selected_model.startswith("Micro Radio"):
+                if not selected_model.startswith("DOT "):
+                    radio_label = "Micro Radio" if selected_model.startswith("Micro Radio") else "Radio"
                     average_col, radio_col = st.columns(2)
                     average_col.metric(
-                        "Average sq ft / Micro Radio",
+                        f"Average sq ft / {radio_label}",
                         f"{equipment_summary['Average_sqft_per_DOT_Radio']:,.0f}",
                     )
                     radio_col.metric(
-                        "Total required Micro Radios",
+                        f"Total required {radio_label}s",
                         f"{equipment_summary['Total_Required_DOTs_Radios']:,}",
                     )
                     st.caption(
-                        "Micro Radio count is coverage based. IRU and BBU quantities are not shown because "
-                        "the reference table does not define a Micro Radio-to-baseband equipment ratio."
+                        f"{radio_label} count is coverage based. IRU and BBU quantities are not shown because "
+                        "the reference table does not define an equipment conversion ratio for this radio."
                     )
                 else:
                     average_col, dot_col, iru_col, bbu_col = st.columns(4)

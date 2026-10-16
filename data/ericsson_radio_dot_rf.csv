@@ -8,8 +8,13 @@ DOT 4455,KRY 901 551/1,B77D,C-band,3700,3980,NR,TDD,4,26,5.39,Use 24 dBm for a s
 DOT 4459,KRY 901 502/1,B41K,2.5 GHz,2515,2675,LTE/NR,TDD,4,26,5.5,Standard default
 DOT 4459,KRY 901 516/1,B48,CBRS,3550,3700,LTE/NR,TDD,4,26,5.3,Actual power may be limited by SAS authorization
 DOT 4459,KRY 901 515/1,B77D,C-band,3700,3980,NR,TDD,4,26,5.4,Standard default
+DOT 4459,KRY 901 590/1,B77S,3.8 GHz,3800,4200,NR,TDD,4,27,5.4,500 mW per branch; user-requested planning antenna gain of 5.4 dBi matches the existing DOT 4459 B77D reference
+DOT 4479,KRY 901 431/1,B78A,3.3 GHz,3300,3600,LTE/NR,TDD,4,24,5.4,250 mW per branch; user-requested planning antenna gain of 5.4 dBi matches the existing DOT 4459 B77D reference
+DOT 4479,KRY 901 433/1,B78L,3.5 GHz,3500,3800,LTE/NR,TDD,4,24,5.4,250 mW per branch; user-requested planning antenna gain of 5.4 dBi matches the existing DOT 4459 B77D reference
 DOT 2274,KRY 901 468/1,B25,PCS,1930,1995,LTE/NR/WCDMA,FDD,2,23,1.3,Standard default
 DOT 2274,KRY 901 468/1,B66,AWS,2110,2200,LTE/NR/WCDMA,FDD,2,23,1.1,Standard default
 Micro Radio 4402,KRC 161 737/1,B25,PCS,1930,1995,LTE/NR/WCDMA,FDD,4,37,9.2,5 W per branch nominal maximum; gain assumes integrated KRE 105 280/1 antenna
 Micro Radio 4402,KRC 161 738/1,B66,AWS,2110,2200,LTE/NR/WCDMA,FDD,4,37,8.5,5 W per branch nominal maximum; gain assumes integrated Antenna 6523; external antenna gain is deployment dependent
 Micro Radio 4408,KRC 161 746/1,B48,CBRS,3550,3700,LTE/NR,TDD,4,37,12.06,5 W per branch nominal maximum; gain assumes integrated KRE 105 281/1 antenna; actual transmit power/EIRP may be limited by SAS authorization
+Radio 4461HP,KRC 161 0077/11,B40,2.3 GHz,2300,2400,LTE/NR,TDD,4,47.78,0,60 W per RF port; external antenna gain is deployment dependent and excluded
+Radio 2271,KRC 161 2228/11,B28,700 MHz,758,803,LTE/NR,FDD,2,49.03,0,80 W per RF port; external antenna gain is deployment dependent and excluded

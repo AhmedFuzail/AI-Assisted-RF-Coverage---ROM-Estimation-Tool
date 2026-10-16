@@ -14,6 +14,10 @@ from typing import Any, Mapping
 DATA_SOURCE = "Ericsson indoor radio RF reference table"
 RADIO_REFERENCE_PATH = Path(__file__).resolve().parent / "data" / "ericsson_radio_dot_rf.csv"
 DOT_4459_MAX_TX_POWER_DBM_PER_BRANCH = 23.0
+PRIVATE_5G_BANDWIDTH_MHZ = 40.0
+_INFORMATIONAL_POWER_NOTES = {
+    "500 mW per branch; user-requested planning antenna gain of 5.4 dBi matches the existing DOT 4459 B77D reference",
+}
 ENTERPRISE_COVERAGE_DOT_4455_N77_MAX_TX_POWER_DBM_PER_BRANCH = 24.0
 
 LTE_RB_TABLE = {
@@ -103,6 +107,11 @@ def normalize_radio_model(value: Any) -> str:
         raise ValueError(f"Unsupported radio model: {value or 'blank'}.")
     if "MICRO" in text:
         return f"Micro Radio {match.group(1)}"
+    compact = re.sub(r"[^A-Z0-9]", "", text)
+    if ("RADIO" in text and "DOT" not in text) or compact in {"2271", "4461HP"}:
+        suffix_match = re.search(r"\d{4}\s*([A-Z]+)", text)
+        suffix = suffix_match.group(1) if suffix_match else ""
+        return f"Radio {match.group(1)}{suffix}"
     return f"DOT {match.group(1)}"
 
 
@@ -157,7 +166,22 @@ def normalize_band(value: Any) -> str:
         "B48CBRS": "B48",
         "B77D": "B77D",
         "B77G": "B77G",
+        "B77S": "B77S",
+        "B78A": "B78A",
+        "B78L": "B78L",
+        "B40": "B40",
+        "B28": "B28",
         "N77": "B77D",
+        "N77S": "B77S",
+        "N78A": "B78A",
+        "N78L": "B78L",
+        "N40": "B40",
+        "N28": "B28",
+        "40": "B40",
+        "28": "B28",
+        "BAND40": "B40",
+        "BAND28": "B28",
+        "700MHZ": "B28",
         "N77/CBAND": "B77D",
         "N77CBAND": "B77D",
         "CBAND": "B77D",
@@ -168,15 +192,24 @@ def normalize_band(value: Any) -> str:
     return normalized
 
 
-def default_bandwidth_mhz(band: Any, technology: Any) -> float:
+def default_bandwidth_mhz(band: Any, technology: Any, operator_type: Any = "") -> float:
     """Return the application bandwidth default for a normalized RF band."""
+    if str(operator_type or "").strip().casefold() == "enterprise private 5g":
+        return PRIVATE_5G_BANDWIDTH_MHZ
     normalized_band = normalize_band(band)
     normalized_technology = normalize_technology(technology)
-    if normalized_band in {"B77D", "B77G"}:
-        return 80.0
-    if normalized_band in {"B25", "B66"}:
+    if normalized_technology == "LTE":
         return 20.0
-    return 20.0 if normalized_technology == "LTE" else 40.0
+    if normalized_band in {"B77D", "B77G", "B77S", "B78A", "B78L"}:
+        return 80.0
+    if normalized_band in {"B25", "B66", "B28"}:
+        return 20.0
+    return 40.0
+
+
+def tx_power_upper_bound_dbm(characteristics: RadioDotCharacteristics) -> float:
+    """Retain the legacy override range while accepting higher rated radios."""
+    return max(40.0, characteristics.default_tx_power_dbm_per_branch)
 
 
 def _to_float(value: Any, field_name: str) -> float:
@@ -294,7 +327,7 @@ def _load_reference(reference_path: str, modified_ns: int) -> tuple[RadioDotChar
 
         warnings = []
         power_note = row["power_note"].strip()
-        if power_note and power_note.lower() != "standard default":
+        if power_note and power_note.lower() != "standard default" and power_note not in _INFORMATIONAL_POWER_NOTES:
             warnings.append(power_note)
         documented_power = re.search(r"use\s+(-?\d+(?:\.\d+)?)\s*dBm", power_note, re.IGNORECASE)
         numeric_power = _to_float(row["default_tx_power_dbm_per_branch"], "default_tx_power_dbm_per_branch")
@@ -460,14 +493,20 @@ def build_radio_mapl_config(
         )
 
     normalized_technology = normalize_technology(technology)
+    operator_type = _mapping_value(user_inputs, "Operator_type", "operator_type")
+    if operator_type is None:
+        operator_type = _mapping_value(calculated_data, "Operator_type", "operator_type")
     bandwidth_value = _mapping_value(user_inputs, "bandwidth_mhz")
     bandwidth_source = "user override"
     if bandwidth_value is None:
         bandwidth_value = _mapping_value(calculated_data, "bandwidth_mhz", "Bandwidth_MHz")
         bandwidth_source = "existing project value"
     if bandwidth_value is None:
-        bandwidth_value = default_bandwidth_mhz(radio_reference.band, normalized_technology)
+        bandwidth_value = default_bandwidth_mhz(radio_reference.band, normalized_technology, operator_type)
         bandwidth_source = "application default"
+    if str(operator_type or "").strip().casefold() == "enterprise private 5g":
+        bandwidth_value = PRIVATE_5G_BANDWIDTH_MHZ
+        bandwidth_source = "Enterprise Private 5G fixed bandwidth policy"
     bandwidth = _to_float(bandwidth_value, "bandwidth_mhz")
     value_sources["bandwidth_mhz"] = bandwidth_source
     if bandwidth_source == "user override":
@@ -499,12 +538,11 @@ def build_radio_mapl_config(
     else:
         configured_power = radio_reference.default_tx_power_dbm_per_branch
         value_sources["configured_tx_power_dbm_per_branch"] = DATA_SOURCE
-    if configured_power < -10 or configured_power > 40:
-        raise ValueError("configured_tx_power_dbm_per_branch must be between -10 and 40 dBm.")
-
-    operator_type = _mapping_value(user_inputs, "Operator_type", "operator_type")
-    if operator_type is None:
-        operator_type = _mapping_value(calculated_data, "Operator_type", "operator_type")
+    power_upper_bound = tx_power_upper_bound_dbm(radio_reference)
+    if configured_power < -10 or configured_power > power_upper_bound:
+        raise ValueError(
+            f"configured_tx_power_dbm_per_branch must be between -10 and {power_upper_bound:g} dBm."
+        )
 
     carrier_count_value = _mapping_value(user_inputs, "carrier_count", "Max_lim_channel_count")
     if carrier_count_value is None:

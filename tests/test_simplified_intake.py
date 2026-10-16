@@ -21,6 +21,7 @@ class SimplifiedIntakeTests(unittest.TestCase):
     def assert_app_ok(self, app):
         self.assertEqual([error.message for error in app.exception], [])
         self.assertEqual([error.value for error in app.error], [])
+        self.assertEqual([warning.value for warning in app.warning], [])
 
     def click(self, app, label):
         next(button for button in app.button if button.label == label).click().run()
@@ -38,7 +39,7 @@ class SimplifiedIntakeTests(unittest.TestCase):
             "Equipment Type": "Micro-BBU" if micro else "DOT-IRU-BBU",
             "Operator Type": "Enterprise Private 5G" if private else "Enterprise 5G Coverage",
             "Coverage Type": coverage,
-            "Radio Model": radio,
+            "Radio Model": f"{radio} : {band}" if private and not micro else radio,
             "Hardware Variant": (
                 "KRC 161 738/1" if micro else
                 "KRY 901 551/1" if band in {"B41", "B77G"} else "KRY 901 523/1"
@@ -51,14 +52,17 @@ class SimplifiedIntakeTests(unittest.TestCase):
                 return app
             self.assertNotIn("Number of Floors", [widget.label for widget in app.text_input])
             self.assertNotIn("Operators on Highest Band", [widget.label for widget in app.select_slider])
+            if private:
+                self.assertNotIn("Coverage Type", [widget.label for widget in app.selectbox])
             for widget in app.text_input:
                 if widget.label in answers:
                     widget.set_value(answers[widget.label])
             for widget in app.selectbox:
                 if widget.label == "Equipment Type":
-                    self.assertEqual(widget.options, ["Radio Dot Solution", "Micro Radio Solution"])
+                    self.assertEqual(widget.options, ["Radio Dot Solution", "Micro Radio Solution", "Radio Solution"])
                 if widget.label == "Radio Model" and not private and not micro:
-                    self.assertEqual(widget.options, ["DOT 2274 : AWS/PCS", "DOT 4455 : C-band / B41"])
+                    expected = ["DOT 2274 : AWS/PCS", "DOT 4455 : C-band / B41"]
+                    self.assertEqual(widget.options, expected)
                 if widget.label in answers:
                     if widget.label == "Highest Frequency Band":
                         self.band_step = app.session_state["rf_intake_step"]
@@ -92,6 +96,7 @@ class SimplifiedIntakeTests(unittest.TestCase):
         options = app.selectbox(key="rf_intake_edit_field").options
         self.assertIn("Equipment Type: Radio Dot Solution", options)
         self.assertIn("Radio Model: DOT 4455 : C-band / B41", options)
+        self.assertIn("Coverage Type: 5G", options)
         self.assertFalse(any("Operators on Highest Band" in option or "Number of Floors" in option for option in options))
 
     def test_public_band_policy_replaces_saved_operator_count_and_cached_results(self):

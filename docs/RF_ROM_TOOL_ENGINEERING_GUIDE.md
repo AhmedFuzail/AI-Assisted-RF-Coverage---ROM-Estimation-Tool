@@ -56,6 +56,7 @@ flowchart TD
 | --- | --- | --- | --- |
 | `main.py` | Streamlit UI and workflow orchestration | User selections, workbook data, session state | RF intake, editable area records, MAPL and coverage tables |
 | `radio_reference.py` | Radio lookup, validation, typed RF configuration, MAPL | Radio model, KRY, band, technology, target RSRP | `RadioDotCharacteristics`, `RadioMaplConfig`, MAPL result dictionary |
+| `radio_selection.py` | Shared deployment and equipment filters for both UIs | Equipment architecture, operator, model and technology | Compatible models and deployment bands |
 | `coverage_engine.py` | Building normalization, ITU mapping, LOS/NLOS, coverage and radio count | Area record plus MAPL result | One normalized coverage result per area/band/technology |
 | `data/ericsson_radio_dot_rf.csv` | Controlled Ericsson Radio Dot characteristics | Model, KRY, band and technology key | Frequency range, duplex mode, branches, power, gain and notes |
 | `Sub_Type_RF_Assumptions_Losses.xlsx` | Building/subtype and RF assumption library | Building type, category and subtype | Area mix, materials, clutter, environment, layout and diagnostic losses |
@@ -179,7 +180,7 @@ The table below separates active calculation inputs from values collected for wo
 | Use Case Type | `use_case_type` | Selects 7 DOTs/IRU for Coverage Focused or 5.5 DOTs/IRU for Capacity Focused | Equipment conversion only |
 | Equipment Type | `sol_type` | Filters Radio Dot versus Micro selections | Selection logic only |
 | Operator Type | `Operator_type` | Determines private NR or public LTE/NR workflow | Yes |
-| Coverage Type | `Coverage_type` | Maps 4G to LTE and 5G to NR | Yes |
+| Coverage Type | `Coverage_type` | Selectable 4G (LTE) / 5G (NR) for Enterprise 5G Coverage; automatically 5G and skipped for Private 5G | Yes |
 | Target RSRP | `target_rsrp` | Becomes `target_rsrp_dbm` | Yes, MAPL |
 | Radio Dot Model | `dot_type` | Normalized to `dot_model` | Yes, lookup key |
 | Hardware Variant | `dot_variant_kry` | Exact KRY or unique inference | Yes, lookup key |
@@ -193,18 +194,21 @@ The table below separates active calculation inputs from values collected for wo
 | Condition | Behavior |
 | --- | --- |
 | `Operator_type == Enterprise Private 5G` | Technology is NR; Coverage Type is auto-set to 5G; operator count, channel count and intake power sharing are auto-set to 1, 1 and False |
-| `Operator_type == Enterprise 5G Coverage` | User selects Coverage Type 4G or 5G |
-| Enterprise 5G Coverage with 4G | Technology is LTE; deployment bands are B25 and B66 |
-| Enterprise 5G Coverage with 5G | Technology is NR; deployment bands are B77D and B77G |
-| Enterprise Private 5G | Deployment band is B48 |
+| `Operator_type == Enterprise 5G Coverage` | User selects Coverage Type 4G or 5G; the field remains editable |
+| Saved Enterprise 5G Coverage with 4G | The 4G selection is preserved; an incompatible private-only radio is cleared and the user returns to the required intake question |
+| Enterprise 5G Coverage with 5G | Technology is NR; bands are filtered by the model/variant and RF CSV; the additions are B77S, B78A/B78L, B40 and B28 |
+| Enterprise Private 5G | DOT bands are B77S/B48 for DOT 4459 and B78A/B78L for DOT 4479; Micro Radio 4408 remains available on B48 |
 | One compatible hardware variant | Hardware-variant question is auto-filled and skipped; multiple variants remain selectable with supported bands shown |
 | Public coverage workflow | Target RSRP question is skipped; calculation currently falls back to -95 dBm |
-| Private 5G + DOT-IRU-BBU | DOT 4459 is the only Radio Model option |
-| Enterprise 5G Coverage + DOT-IRU-BBU | DOT 2274 and DOT 4455 are available; DOT 4455 N77 is capped at 24 dBm/branch after operator sharing |
+| Private 5G + DOT-IRU-BBU | Four choices: DOT 4459 : B77S, DOT 4479 : B78A, DOT 4479 : B78L, DOT 4459 : B48; each auto-fills hardware variant and band |
+| Enterprise 5G Coverage + DOT-IRU-BBU | DOT 2274 and DOT 4455 are available; DOT 4459 and DOT 4479 are excluded; technology filters variants and bands |
+| Enterprise 5G Coverage + Radio-BBU | Radio 4461HP on B40 and Radio 2271 on B28 support either selected public coverage technology; the simplified UI labels this architecture Radio Solution |
 
 ### 5.2 Dependent radio selectors
 
 The intended dependency order is:
+
+Private Coverage Type is normalized to 5G; public coverage preserves the selected 4G/5G value. The four private DOT model/band labels are converted back to canonical `dot_type` model keys. Their selected band is retained as `radio_model_band`, while `dot_variant_kry` and `Limit_freq_type` are populated from the RF reference. Model, operator, or coverage edits clear prior results and update dependent fields together. On rerun, previously saved incompatible choices are cleared and the workflow returns to the first required unanswered field.
 
 ```text
 Operator/Coverage Type
@@ -330,9 +334,16 @@ dot_model + dot_variant_kry + band + supported technology + duplex mode
 | DOT 4459 / KRY 901 502/1 | B41K | LTE/NR | 26 dBm | 4 |
 | DOT 4459 / KRY 901 516/1 | B48 | LTE/NR | 26 dBm | 4 |
 | DOT 4459 / KRY 901 515/1 | B77D | NR | 26 dBm | 4 |
+| DOT 4459 / KRY 901 590/1 | B77S | NR | 27 dBm | 4 |
+| DOT 4479 / KRY 901 431/1 | B78A | LTE/NR | 24 dBm | 4 |
+| DOT 4479 / KRY 901 433/1 | B78L | LTE/NR | 24 dBm | 4 |
+| Radio 4461HP / KRC 161 0077/11 | B40 | LTE/NR | 47.78 dBm | 4 |
+| Radio 2271 / KRC 161 2228/11 | B28 | LTE/NR | 49.03 dBm | 2 |
 | DOT 2274 / KRY 901 468/1 | B25, B66 | LTE/NR | 23 dBm | 2 |
 
 The antenna gain and frequency range remain row-specific. Consult the CSV for exact values.
+
+DOT 4459 B77S and DOT 4479 B78A/B78L use a user-requested planning antenna gain of 5.4 dBi, matching the existing DOT 4459 B77D reference. The CSV notes identify this planning assumption. The DOT 4459 B77S 500 mW/planning-gain note is informational metadata and is omitted from UI, MAPL, and coverage warnings. Radio 4461HP and Radio 2271 exclude deployment-specific external antenna gain (0 dBi in this reference). Other operating warnings are retained. Macro and Micro Radio coverage counts do not use DOT-to-IRU or IRU-to-BBU conversion ratios.
 
 ### 7.4 Normalization examples
 
@@ -376,6 +387,11 @@ Examples of current reference midpoints:
 | B48 | 3550-3700 MHz | 3625 MHz |
 | B77G | 3450-3550 MHz | 3500 MHz |
 | B77D | 3700-3980 MHz | 3840 MHz |
+| B77S | 3800-4200 MHz | 4000 MHz |
+| B78A | 3300-3600 MHz | 3450 MHz |
+| B78L | 3500-3800 MHz | 3650 MHz |
+| B40 | 2300-2400 MHz | 2350 MHz |
+| B28 | 758-803 MHz | 780.5 MHz |
 
 `coverage_engine.py` still contains legacy center-frequency aliases such as `N77/C-Band = 3750 MHz` for compatibility with older direct calls. The current Streamlit Radio Dot workflow passes `Frequency_MHz` from the RF reference, so B77D normally uses 3840 MHz, not the legacy 3750 MHz fallback.
 
@@ -401,7 +417,7 @@ The tool does not calculate a dynamic SAS authorization limit. After operator sh
 | `technology` | `resolve_technology(Operator_type, Coverage_type)` | LTE/NR |
 | `duplex_mode` | Radio reference row | FDD/TDD |
 | `carrier_frequency_mhz` | Override or reference midpoint | MHz |
-| `bandwidth_mhz` | Band default: N77/B77 80; B25/B66 20; other LTE 20; other NR 40 | MHz |
+| `bandwidth_mhz` | Private 5G fixed at 40; other deployments: LTE 20, NR B77/B78 80, B25/B66/B28 20, other NR 40 | MHz |
 | `scs_khz` | LTE uses 15; current NR default is 30 | kHz |
 | `tx_branch_count` | Radio reference row | count |
 | `configured_tx_power_dbm_per_branch` | Advanced override or reference default | dBm/branch |
@@ -410,7 +426,7 @@ The tool does not calculate a dynamic SAS authorization limit. After operator sh
 | `power_share_count` | `Operator_count` | count |
 | `power_is_total_across_carriers` | Derived `power_sharing`, true when operator count is greater than 1 | boolean |
 | `target_rsrp_dbm` | Target RSRP or current -95 dBm fallback | dBm |
-| `margin_db` | Centralized hidden UI policy selected from `Operator_type` | **15.5 dB Private 5G; 24.85 dB Enterprise 5G Coverage** |
+| `margin_db` | Centralized hidden UI policy selected from `Operator_type` | **15.5 dB for Private 5G and Enterprise 5G Coverage** |
 
 Value precedence is:
 
@@ -427,12 +443,12 @@ validated user override
 
 | Parameter | LTE | NR |
 | --- | ---: | ---: |
-| Bandwidth | B25/B66 and other LTE: 20 MHz | N77/B77: 80 MHz; B25/B66: 20 MHz; other NR: 40 MHz |
+| Bandwidth | All supported LTE selections: 20 MHz | Private 5G: fixed 40 MHz for every radio model and band. Other deployments: B77/B78 80 MHz; B25/B66/B28 20 MHz; other NR 40 MHz |
 | SCS | 15 kHz | 30 kHz |
 | Target RSRP when no user value exists | -95 dBm | -95 dBm |
-| Design margin passed by Streamlit | 15.5 dB for Enterprise Private 5G; 24.85 dB for Enterprise 5G Coverage | 15.5 dB for Enterprise Private 5G; 24.85 dB for Enterprise 5G Coverage |
+| Design margin passed by Streamlit | 15.5 dB for Enterprise Private 5G and Enterprise 5G Coverage | 15.5 dB for Enterprise Private 5G and Enterprise 5G Coverage |
 
-The underlying typed schema still defines a generic 6 dB default for callers that omit margin. Both Streamlit applications call `resolve_streamlit_design_margin_db(Operator_type)`. The helper returns 15.5 dB for Enterprise Private 5G and 24.85 dB for Enterprise 5G Coverage; `STREAMLIT_DESIGN_MARGIN_DB = 14.0` remains the backward-compatible fallback for an empty or unknown deployment type.
+The underlying typed schema still defines a generic 6 dB default for callers that omit margin. Both Streamlit applications call `resolve_streamlit_design_margin_db(Operator_type)`. The helper returns 15.5 dB for Enterprise Private 5G and Enterprise 5G Coverage; `STREAMLIT_DESIGN_MARGIN_DB = 14.0` remains the backward-compatible fallback for an empty or unknown deployment type.
 
 ### 9.2 Resource block tables
 
@@ -909,7 +925,7 @@ The result carries the Enterprise 5G Coverage power-policy warning. The policy c
 - LTE is rejected for NR-only rows.
 - Ambiguous KRY configurations are rejected.
 - Carrier frequency must lie within the selected radio range.
-- Configured power must be between -10 and 40 dBm.
+- Configured power must be between -10 dBm and the greater of 40 dBm or the selected radio's reference power (47.78 dBm for Radio 4461HP; 49.03 dBm for Radio 2271).
 - Target RSRP must be between -140 and -40 dBm.
 - Margin must be between 0 and 30 dB.
 - LTE bandwidth and NR bandwidth/SCS combinations must exist in the RB tables.
@@ -1028,8 +1044,8 @@ only after both engines have defined units and scope consistently.
 
 ## 18. Current Limitations and Engineering Gaps
 
-1. **Calibrated UI margin:** The current live Streamlit workflow uses a centralized hidden margin of 15.5 dB for Enterprise Private 5G and 24.85 dB for Enterprise 5G Coverage. An unknown deployment type falls back to 14 dB.
-2. **Band-default bandwidth/SCS:** N77/B77 uses 80 MHz; B25/B66 uses 20 MHz for LTE or NR; other LTE uses 20 MHz and other NR uses 40 MHz. NR uses 30 kHz SCS.
+1. **Calibrated UI margin:** The current live Streamlit workflow uses a centralized hidden margin of 15.5 dB for Enterprise Private 5G and Enterprise 5G Coverage. An unknown deployment type falls back to 14 dB.
+2. **Bandwidth/SCS policy:** Enterprise Private 5G is fixed to 40 MHz in the shared RF configuration, overriding supplied user or project bandwidth values for all radio models. At the UI's 30 kHz SCS this gives 106 RBs. Public coverage retains LTE 20 MHz and NR band defaults (B77/B78 80 MHz, B25/B66/B28 20 MHz, other NR 40 MHz). Cached Private 5G results with a different bandwidth are invalidated on rerun.
 3. **Public target RSRP:** Enterprise 5G Coverage currently falls back to -95 dBm because its target question is skipped.
 4. **Micro equipment chain:** Micro 4402/4408 RF characteristics and radio counts are supported, but IRU/BBU conversion is not shown because no Micro Radio-to-baseband ratio is defined.
 5. **Floors:** Number of floors does not affect coverage or radio count.
@@ -1038,7 +1054,7 @@ only after both engines have defined units and scope consistently.
 8. **Ceiling height:** High ceiling currently produces a warning but no dB correction.
 9. **Sigma:** ITU sigma is reported but not directly applied.
 10. **Floorplan geometry:** Area efficiency is a scalar approximation; no polygon, wall-object or corridor-routing model is used.
-11. **SAS:** Dynamic SAS authorization limits are not calculated; DOT 4459 uses a fixed 23 dBm-per-branch cap for both deployment types after operator sharing, although the guided Enterprise 5G Coverage intake no longer offers that radio. Enterprise 5G Coverage DOT 4455 N77 uses a fixed 24 dBm-per-branch cap after sharing.
+11. **SAS:** Dynamic SAS authorization limits are not calculated; DOT 4459 uses a fixed 23 dBm-per-branch cap after operator sharing. The guided intake offers DOT 4459 on B77S/B48 only for Private 5G. Enterprise 5G Coverage DOT 4455 N77 uses a fixed 24 dBm-per-branch cap after sharing.
 12. **Multiple bands:** The engine supports multiple MAPL records, but the current UI runs one selected band at a time.
 13. **Location:** Address and coordinates do not select regulatory domain or propagation parameters.
 
@@ -1082,7 +1098,7 @@ only after both engines have defined units and scope consistently.
 2. Confirm the displayed frequency is appropriate, not only the range midpoint.
 3. Confirm per-branch power and any carrier-sharing interpretation.
 4. Review the CBRS warning where applicable.
-5. Confirm target RSRP and understand the selected design-type margin (15.5 dB Private 5G or 24.85 dB Enterprise 5G Coverage).
+5. Confirm target RSRP and understand the selected design-type margin (15.5 dB for Private 5G and Enterprise 5G Coverage).
 6. Confirm subtype percentages total 100%.
 7. Review each area environment, LOS/NLOS reason and confidence.
 8. Review any model frequency/distance extrapolation warning.

@@ -110,6 +110,37 @@ class RadioReferenceTests(unittest.TestCase):
         self.assertIn("Micro Radio 4402", get_radio_dot_models())
         self.assertIn("Micro Radio 4408", get_radio_dot_models())
 
+    def test_new_dot_and_macro_radio_reference_rows(self):
+        b77s = get_radio_dot_characteristics("DOT 4459", None, "B77S", "NR")
+        self.assertEqual(b77s.dot_variant_kry, "KRY 901 590/1")
+        self.assertEqual(b77s.default_tx_power_dbm_per_branch, 27)
+        self.assertEqual(b77s.antenna_gain_dbi, 5.4)
+
+        b78a = get_radio_dot_characteristics("DOT 4479", None, "B78A", "LTE")
+        self.assertEqual((b78a.frequency_min_mhz, b78a.frequency_max_mhz), (3300, 3600))
+        self.assertEqual(b78a.tx_branch_count, 4)
+        self.assertEqual(b78a.antenna_gain_dbi, 5.4)
+        b78l = get_radio_dot_characteristics("DOT 4479", None, "B78L", "NR")
+        existing = get_radio_dot_characteristics("DOT 4459", None, "B77D", "NR")
+        for row in (b77s, b78a, b78l):
+            self.assertEqual(row.antenna_gain_dbi, existing.antenna_gain_dbi)
+            self.assertIn("planning antenna gain", row.power_note)
+            if row.band == "B77S":
+                self.assertNotIn(row.power_note, row.warnings)
+            else:
+                self.assertIn("planning antenna gain", " ".join(row.warnings))
+            self.assertNotIn("placeholder", " ".join(row.warnings))
+
+        b40 = get_radio_dot_characteristics("Radio 4461HP", None, "B40", "NR")
+        self.assertEqual(b40.dot_model, "Radio 4461HP")
+        self.assertEqual(b40.dot_variant_kry, "KRC 161 0077/11")
+        self.assertAlmostEqual(b40.default_tx_power_dbm_per_branch, 47.78)
+
+        b28 = get_radio_dot_characteristics("Radio 2271", None, "B28", "LTE")
+        self.assertEqual(b28.dot_model, "Radio 2271")
+        self.assertEqual(b28.tx_branch_count, 2)
+        self.assertAlmostEqual(b28.default_tx_power_dbm_per_branch, 49.03)
+
     def test_dot_4455_b77d_requires_variant(self):
         with self.assertRaisesRegex(ValueError, "more than one hardware variant"):
             get_radio_dot_characteristics("DOT4455", None, "N77/C-Band", "NR")
@@ -136,14 +167,20 @@ class RadioReferenceTests(unittest.TestCase):
         self.assertEqual(normalize_dot_model("Radio Dot 4455"), "DOT 4455")
         self.assertEqual(normalize_radio_model("Micro_4408"), "Micro Radio 4408")
         self.assertEqual(normalize_radio_model("Micro Radio 4402"), "Micro Radio 4402")
+        self.assertEqual(normalize_radio_model("Radio 4461HP"), "Radio 4461HP")
+        self.assertEqual(normalize_radio_model("Radio 2271"), "Radio 2271")
+        self.assertEqual(normalize_radio_model("2271"), "Radio 2271")
         self.assertEqual(normalize_variant_kry("KRC161 746/1"), "KRC 161 746/1")
         self.assertEqual(normalize_band("Band 25"), "B25")
         self.assertEqual(normalize_band("B4/B66"), "B66")
         self.assertEqual(normalize_band("N77/C-Band"), "B77D")
+        self.assertEqual(normalize_band("n40"), "B40")
+        self.assertEqual(normalize_band("700 MHz"), "B28")
 
     def test_band_specific_default_bandwidths(self):
         self.assertEqual(default_bandwidth_mhz("N77/C-Band", "NR"), 80.0)
         self.assertEqual(default_bandwidth_mhz("B77G", "5G"), 80.0)
+        self.assertEqual(default_bandwidth_mhz("B78A", "5G"), 80.0)
         self.assertEqual(default_bandwidth_mhz("B25", "LTE"), 20.0)
         self.assertEqual(default_bandwidth_mhz("B25", "NR"), 20.0)
         self.assertEqual(default_bandwidth_mhz("B66", "4G"), 20.0)
@@ -182,6 +219,86 @@ class RadioReferenceTests(unittest.TestCase):
         self.assertEqual(result["Configured_Tx_Power_dBm_per_Branch"], 20)
         self.assertIn("configured_tx_power_dbm_per_branch", result["Override_Fields"])
         self.assertIn("user-configured", result["Warnings"])
+
+    def test_private_5g_fixes_40_mhz_for_every_nr_radio_reference(self):
+        for row in load_radio_dot_reference():
+            if "NR" not in row.supported_technologies:
+                continue
+            for source in ("user", "project"):
+                with self.subTest(model=row.dot_model, variant=row.dot_variant_kry, band=row.band, source=source):
+                    inputs = {
+                        "technology": "NR", "Operator_type": "Enterprise Private 5G",
+                        "target_rsrp_dbm": -95,
+                    }
+                    calculated = {}
+                    if source == "user":
+                        inputs["bandwidth_mhz"] = 80
+                    else:
+                        calculated["bandwidth_mhz"] = 80
+                    config = build_radio_mapl_config(inputs, calculated, radio_reference=row)
+                    self.assertEqual(config.bandwidth_mhz, 40)
+                    self.assertEqual(calculate_mapl(config)["RB_Count"], 106)
+                    self.assertEqual(config.value_sources["bandwidth_mhz"], "Enterprise Private 5G fixed bandwidth policy")
+                    self.assertNotIn("bandwidth_mhz", config.override_fields)
+        self.assertEqual(default_bandwidth_mhz("B77S", "NR", "Enterprise Private 5G"), 40)
+        public = radio_config("DOT 4455", "KRY 901 523/1", "B77D", "NR", Operator_type="Enterprise 5G Coverage")
+        self.assertEqual(public.bandwidth_mhz, 80)
+
+    def test_enterprise_additions_reach_mapl_and_coverage(self):
+        cases = [
+            ("DOT 4459", "B77S", 4000, 27, 5.4),
+            ("DOT 4479", "B78A", 3450, 24, 5.4),
+            ("DOT 4479", "B78L", 3650, 24, 5.4),
+            ("Radio 4461HP", "B40", 2350, 47.78, 0),
+            ("Radio 2271", "B28", 780.5, 49.03, 0),
+        ]
+        for model, band, frequency, power, gain in cases:
+            for technology in (("NR",) if band == "B77S" else ("LTE", "NR")):
+                with self.subTest(model=model, band=band, technology=technology):
+                    config = radio_config(
+                        model, None, band, technology,
+                        Operator_type="Enterprise 5G Coverage", Operator_count=3,
+                    )
+                    result = calculate_mapl(config)
+                    expected_power = power - 10 * math.log10(3)
+                    if model == "DOT 4459":
+                        expected_power = min(expected_power, 23)
+                    rb_count = 100 if technology == "LTE" else (217 if band.startswith(("B77", "B78")) else 51 if band == "B28" else 106)
+                    expected_mapl = expected_power + gain - 10 * math.log10(12 * rb_count) + 95
+                    self.assertEqual(result["Frequency_MHz"], frequency)
+                    self.assertEqual(result["RB_Count"], rb_count)
+                    self.assertAlmostEqual(result["MAPL_Before_Margin_dB"], expected_mapl)
+                    self.assertAlmostEqual(result["Final_MAPL_dB"], expected_mapl - 6)
+                    coverage = calculate_building_coverage(open_office(), result, margin_db=6)
+                    self.assertTrue(coverage["Result_Valid_For_Planning"])
+                    self.assertEqual(coverage["Band"], band)
+                    self.assertEqual(coverage["Frequency_MHz"], frequency)
+                    self.assertAlmostEqual(coverage["Usable_MAPL_dB"], expected_mapl - 6)
+                    self.assertGreater(coverage["Number_of_required_DOTs_Radios"], 0)
+                    if band == "B77S":
+                        self.assertNotIn("500 mW per branch", result["Warnings"])
+                        self.assertNotIn("500 mW per branch", coverage["Warnings"])
+                    elif model == "DOT 4479":
+                        self.assertIn("planning antenna gain", result["Warnings"])
+                    elif model.startswith("Radio "):
+                        self.assertIn("external antenna gain", result["Warnings"])
+
+    def test_macro_radio_power_validation_uses_reference_rating(self):
+        for model, band, rating in [("Radio 4461HP", "B40", 47.78), ("Radio 2271", "B28", 49.03)]:
+            with self.subTest(model=model):
+                config = radio_config(model, None, band, "NR", configured_tx_power_dbm_per_branch=rating)
+                self.assertEqual(config.configured_tx_power_dbm_per_branch, rating)
+                with self.assertRaisesRegex(ValueError, "configured_tx_power"):
+                    radio_config(model, None, band, "NR", configured_tx_power_dbm_per_branch=rating + 0.01)
+        with self.assertRaisesRegex(ValueError, "between -10 and 40"):
+            radio_config("DOT 4459", None, "B77S", "NR", configured_tx_power_dbm_per_branch=41)
+
+    def test_b78_lte_defaults_and_invalid_bandwidth_override(self):
+        for band in ("B78A", "B78L"):
+            with self.subTest(band=band):
+                self.assertEqual(radio_config("DOT 4479", None, band, "LTE").bandwidth_mhz, 20)
+                with self.assertRaisesRegex(ValueError, "Unsupported LTE bandwidth"):
+                    radio_config("DOT 4479", None, band, "LTE", bandwidth_mhz=80)
 
     def test_dot_4459_power_cap_is_applied_after_operator_sharing(self):
         public = calculate_mapl(radio_config(
